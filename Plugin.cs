@@ -14,7 +14,7 @@ namespace BalanceAndVarietyRework
     [BepInPlugin("com.Draken0015.BVR", "Balance and Variety Rework", BaseVersion)]
     public class Plugin : BaseUnityPlugin
     {
-        public const string BaseVersion = "1.0.5"; // Bumped version for the new feature
+        public const string BaseVersion = "1.0.6";
 
         // Expose the dynamically generated version hash for multiplayer desync checks
         public static string FullVersionWithHash { get; private set; }
@@ -29,6 +29,7 @@ namespace BalanceAndVarietyRework
         // Split Chicane Scythe Entries
         public static ConfigEntry<bool> EnableChicaneScythesSingle;
         public static ConfigEntry<bool> EnableChicaneScythesDouble;
+        public static ConfigEntry<bool> EnableChicaneInternalRockets;
 
         // Medusa Laser Entries
         public static ConfigEntry<bool> EnableMedusaLaserBuff;
@@ -54,6 +55,7 @@ namespace BalanceAndVarietyRework
 
             EnableChicaneScythesSingle = Config.Bind("Chicane Balance", "Enable Chicane Inner Wing Scythes (Single)", false, "Enables AAM-24 Single mounts onto the Chicane's inner stub pylons.");
             EnableChicaneScythesDouble = Config.Bind("Chicane Balance", "Enable Chicane Inner Wing Scythes (Double)", false, "Enables AAM-24 Double mounts onto the Chicane's inner stub pylons.");
+            EnableChicaneInternalRockets = Config.Bind("Chicane Balance", "Enable Chicane Internal Rockets", true, "Enables the custom AGR-18 Lynchpin x14 double rocket pod in the Chicane's internal bays.");
 
             EnableMedusaLaserBuff = Config.Bind("Medusa Balance", "Enable Medusa Laser Buff", true, "Master toggle to enable modifications to the Medusa's internal laser weapon.");
             MedusaLaserPowerMultiplier = Config.Bind("Medusa Balance", "Medusa Laser Power Multiplier", 0.5f, "Multiplies the power draw of the Medusa's laser. (e.g., 0.5 = half power draw).");
@@ -71,6 +73,7 @@ namespace BalanceAndVarietyRework
             Harmony.CreateAndPatchAll(typeof(StatsPatch));
             Harmony.CreateAndPatchAll(typeof(ProxyGunPatch));
             Harmony.CreateAndPatchAll(typeof(ChicaneScythePatch));
+            Harmony.CreateAndPatchAll(typeof(ChicaneInternalRocketsPatch));
             Harmony.CreateAndPatchAll(typeof(MedusaLaserPatch));
 
             Logger.LogInfo("BVR - Balance and Variety Rework Mod Loaded!");
@@ -80,7 +83,7 @@ namespace BalanceAndVarietyRework
         private string GenerateConfigHash()
         {
             string combinedConfigs = $"{EnableIRMissilesBuff.Value}_{FlareCountMultiplier.Value}_{FlareRejectionMultiplier.Value}_" +
-                                     $"{EnableChicaneProxyGun.Value}_{EnableChicaneScythesSingle.Value}_{EnableChicaneScythesDouble.Value}_" +
+                                     $"{EnableChicaneProxyGun.Value}_{EnableChicaneScythesSingle.Value}_{EnableChicaneScythesDouble.Value}_{EnableChicaneInternalRockets.Value}_" +
                                      $"{EnableMedusaLaserBuff.Value}_{MedusaLaserPowerMultiplier.Value}";
 
             using (var md5 = MD5.Create())
@@ -299,6 +302,109 @@ namespace BalanceAndVarietyRework
 
 
     // ====================================================================================================
+    // 3.5 CHICANE INTERNAL DOUBLE ROCKETS
+    // Config Category: Chicane Balance
+    // ====================================================================================================
+
+    [HarmonyPatch(typeof(WeaponManager), "Awake")]
+    public static class ChicaneInternalRocketsPatch
+    {
+        private static bool hasPatchedInternalRockets = false;
+
+        public static void Prefix()
+        {
+            if (!Plugin.EnableChicaneInternalRockets.Value) return;
+            if (hasPatchedInternalRockets) return;
+
+            var allMounts = Resources.FindObjectsOfTypeAll<WeaponMount>();
+            WeaponMount singleMount = allMounts.FirstOrDefault(w => w.name == "RocketPod1_single");
+
+            if (singleMount == null || singleMount.prefab == null) return;
+
+            // 1. Duplicate the GameObject and configure it
+            GameObject doublePrefab = UnityEngine.Object.Instantiate(singleMount.prefab);
+            doublePrefab.name = "RocketPod1_internal_double";
+            UnityEngine.Object.DontDestroyOnLoad(doublePrefab);
+            doublePrefab.SetActive(true);
+
+            // Set the local position of the entire double pod prefab assembly
+            doublePrefab.transform.localPosition = new Vector3(0f, -0.05f, 0f);
+
+            Transform firstPod = doublePrefab.transform.Find("pod");
+            if (firstPod != null)
+            {
+                firstPod.localPosition = new Vector3(0.13f, -0.15f, 0.3f); // Adjust the position of the first pod
+                firstPod.localEulerAngles = Vector3.zero; // Rotate the first pod to Vector3(0, 0, 0)
+                Transform secondPod = UnityEngine.Object.Instantiate(firstPod.gameObject, doublePrefab.transform).transform;
+                secondPod.name = "pod";
+                secondPod.localPosition = new Vector3(-0.13f, -0.15f, 0.3f); // Position the second pod symmetrically
+                secondPod.localEulerAngles = Vector3.zero; // Rotate the second pod to Vector3(0, 0, 0)
+            }
+
+            // 2. Duplicate the WeaponMount and configure it
+            WeaponMount doubleMount = UnityEngine.Object.Instantiate(singleMount);
+            doubleMount.name = "RocketPod1_internal_double";
+            doubleMount.prefab = doublePrefab;
+
+            var traverseMount = Traverse.Create(doubleMount);
+
+            // Update basic definition names
+            if (traverseMount.Field("mountName").FieldExists())
+                traverseMount.Field("mountName").SetValue("AGR-18 Lynchpin x14");
+                
+            if (traverseMount.Field("jsonKey").FieldExists())
+                traverseMount.Field("jsonKey").SetValue("RocketPod1_internal_double");
+
+            // Fix for internal bay requirement breaking the spawn logic
+            if (traverseMount.Field("missileBay").FieldExists())
+                traverseMount.Field("missileBay").SetValue(true);
+            else if (traverseMount.Property("missileBay").PropertyExists())
+                traverseMount.Property("missileBay").SetValue(true);
+
+            // Fix for Network Lookup Index conflict destroying the ghost duplicate
+            // Generate a stable unique integer hash based on our new name string
+            int customNetworkId = Mathf.Abs("RocketPod1_internal_double".GetHashCode()); 
+            
+            var backingField = traverseMount.Field("<INetworkDefinition.LookupIndex>k__BackingField");
+            if (backingField.FieldExists())
+            {
+                backingField.SetValue(customNetworkId);
+            }
+            
+            // Just in case it reads directly from the property/interface later
+            var interfaceProperty = traverseMount.Property("INetworkDefinition.LookupIndex");
+            if (interfaceProperty.PropertyExists())
+            {
+                interfaceProperty.SetValue(customNetworkId);
+            }
+
+            // 3. Add to AttackHelo1 Internal Bays
+            var allWeaponManagers = Resources.FindObjectsOfTypeAll<WeaponManager>();
+            foreach (var wm in allWeaponManagers)
+            {
+                if (wm.transform.root.name.Contains("AttackHelo1"))
+                {
+                    if (wm.hardpointSets != null && wm.hardpointSets.Length > 1)
+                    {
+                        var internalBays = wm.hardpointSets[1];
+
+                        if (internalBays.weaponOptions != null && !internalBays.weaponOptions.Contains(doubleMount))
+                        {
+                            internalBays.weaponOptions.Add(doubleMount);
+                            Debug.Log($"[ChicaneInternalRockets] Successfully injected double rockets into {wm.gameObject.name} internal bays.");
+                        }
+                    }
+                }
+            }
+
+            hasPatchedInternalRockets = true;
+            Debug.Log("[ChicaneInternalRockets] Master Prefab sweep and generation complete!");
+        }
+    }
+
+
+
+    // ====================================================================================================
     // 4. MEDUSA LASER BUFF
     // Config Category: Medusa Balance
     // ====================================================================================================
@@ -310,16 +416,14 @@ namespace BalanceAndVarietyRework
 
         public static void Prefix()
         {
-            if (!Plugin.EnableMedusaLaserBuff.Value) return; //
-            if (hasPatchedLaser) return; //[cite: 1]
+            if (!Plugin.EnableMedusaLaserBuff.Value) return; 
+            if (hasPatchedLaser) return; 
 
-            // Since the laser is separated from the EW1 root, we sweep all loaded Transforms in memory
             var allTransforms = Resources.FindObjectsOfTypeAll<Transform>();
             bool patchedAny = false;
 
             foreach (var t in allTransforms)
             {
-                // Target the correct decoupled address: Laser_EW1
                 if (t.name.Contains("Laser_EW1"))
                 {
                     bool success = TryPatchMedusaLaser(t.gameObject);
@@ -331,11 +435,10 @@ namespace BalanceAndVarietyRework
                 }
             }
 
-            // Only flip the master flag to true if we actually found and patched the laser
             if (patchedAny)
             {
                 hasPatchedLaser = true;
-                Debug.Log("[MedusaLaserBuff] Master Prefab sweep for Medusa complete!"); //[cite: 1]
+                Debug.Log("[MedusaLaserBuff] Master Prefab sweep for Medusa complete!"); 
             }
         }
 
@@ -348,10 +451,8 @@ namespace BalanceAndVarietyRework
             {
                 if (comp == null) continue;
 
-                // Move down the hierarchy to the "Laser" level (matches either a child GameObject or Script name)
                 if (comp.gameObject.name.Contains("Laser") || comp.GetType().Name.Contains("Laser"))
                 {
-                    // Reuse the existing flag from the missile patch to prevent double-multiplying[cite: 1]
                     if (comp.gameObject.GetComponent<ModifiedStatsFlag>() != null) continue;
 
                     var compTraverse = Traverse.Create(comp);
@@ -359,11 +460,9 @@ namespace BalanceAndVarietyRework
 
                     if (powerField.FieldExists())
                     {
-                        // Extract current power, multiply it by the config value, and write it back[cite: 1]
-                        float currentPower = powerField.GetValue<float>(); //[cite: 1]
-                        powerField.SetValue(currentPower * Plugin.MedusaLaserPowerMultiplier.Value); //[cite: 1]
+                        float currentPower = powerField.GetValue<float>(); 
+                        powerField.SetValue(currentPower * Plugin.MedusaLaserPowerMultiplier.Value); 
 
-                        // Flag the object so we don't accidentally multiply it again
                         comp.gameObject.AddComponent<ModifiedStatsFlag>();
 
                         success = true;
