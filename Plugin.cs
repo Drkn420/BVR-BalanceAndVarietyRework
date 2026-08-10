@@ -14,26 +14,27 @@ namespace BalanceAndVarietyRework
     [BepInPlugin("com.Draken0015.BVR", "Balance and Variety Rework", BaseVersion)]
     public class Plugin : BaseUnityPlugin
     {
-        public const string BaseVersion = "1.0.6";
+        public const string BaseVersion = "1.0.7";
 
         // Expose the dynamically generated version hash for multiplayer desync checks
         public static string FullVersionWithHash { get; private set; }
 
         // Configuration Entries
+
+        //Missile Balance Entries
         public static ConfigEntry<bool> EnableIRMissilesBuff;
         public static ConfigEntry<float> FlareCountMultiplier;
         public static ConfigEntry<float> FlareRejectionMultiplier;
-
+        
+        // Chicane Balance Entries
         public static ConfigEntry<bool> EnableChicaneProxyGun;
-
-        // Split Chicane Scythe Entries
         public static ConfigEntry<bool> EnableChicaneScythesSingle;
         public static ConfigEntry<bool> EnableChicaneScythesDouble;
-        public static ConfigEntry<bool> EnableChicaneInternalRockets;
+        public static ConfigEntry<bool> EnableChicaneInternalLynchpinx14;
 
-        // Medusa Laser Entries
+        // Medusa Balance Entries
         public static ConfigEntry<bool> EnableMedusaLaserBuff;
-        public static ConfigEntry<float> MedusaLaserPowerMultiplier;
+        public static ConfigEntry<float> MedusaLaserPowerDraw;
 
         private void Awake()
         {
@@ -51,14 +52,14 @@ namespace BalanceAndVarietyRework
             FlareCountMultiplier = Config.Bind("Missile Balance", "Flare Count Multiplier", 2.0f, "Multiplies the total number of flares on all aircraft (e.g., 2.0 = double flares, 0.5 = half flares).");
             FlareRejectionMultiplier = Config.Bind("Missile Balance", "Flare Rejection Multiplier", 2.0f, "Multiplies the flare rejection stat on all IR missiles. Higher values make them harder to decoy (e.g., 2.0 = double rejection).");
 
-            EnableChicaneProxyGun = Config.Bind("Chicane Balance", "Enable Chicane Proxy Gun", true, "Enables the proximity fuze on the Chicane's nosegun.");
+            EnableChicaneProxyGun = Config.Bind("Chicane Balance", "Enable Chicane Proximity Fuse 30mm Gun", true, "Enables the proximity fuse on the Chicane's nosegun.");
 
-            EnableChicaneScythesSingle = Config.Bind("Chicane Balance", "Enable Chicane Inner Wing Scythes (Single)", false, "Enables AAM-24 Single mounts onto the Chicane's inner stub pylons.");
-            EnableChicaneScythesDouble = Config.Bind("Chicane Balance", "Enable Chicane Inner Wing Scythes (Double)", false, "Enables AAM-24 Double mounts onto the Chicane's inner stub pylons.");
-            EnableChicaneInternalRockets = Config.Bind("Chicane Balance", "Enable Chicane Internal Rockets", true, "Enables the custom AGR-18 Lynchpin x14 double rocket pod in the Chicane's internal bays.");
+            EnableChicaneScythesSingle = Config.Bind("Chicane Balance", "Enable Chicane Inner Wing Scythe x1", false, "Enables AAM-24 Single mounts onto the Chicane's inner stub pylons.");
+            EnableChicaneScythesDouble = Config.Bind("Chicane Balance", "Enable Chicane Inner Wing Scythe x2", false, "Enables AAM-24 Double mounts onto the Chicane's inner stub pylons.");
+            EnableChicaneInternalLynchpinx14 = Config.Bind("Chicane Balance", "Enable Chicane Internal Lynchpin x14", true, "Enables AGR-18 Lynchpin x14 rocket pod in the Chicane's internal bays.");
 
             EnableMedusaLaserBuff = Config.Bind("Medusa Balance", "Enable Medusa Laser Buff", true, "Master toggle to enable modifications to the Medusa's internal laser weapon.");
-            MedusaLaserPowerMultiplier = Config.Bind("Medusa Balance", "Medusa Laser Power Multiplier", 0.5f, "Multiplies the power draw of the Medusa's laser. (e.g., 0.5 = half power draw).");
+            MedusaLaserPowerDraw = Config.Bind("Medusa Balance", "Medusa Laser Power Draw Value", 60.0f, "Sets the power draw of the Medusa's laser. (Vanilla is 120).");
 
             // 3. Generate Config Hash and format the new version string
             string configHash = GenerateConfigHash();
@@ -73,7 +74,7 @@ namespace BalanceAndVarietyRework
             Harmony.CreateAndPatchAll(typeof(StatsPatch));
             Harmony.CreateAndPatchAll(typeof(ProxyGunPatch));
             Harmony.CreateAndPatchAll(typeof(ChicaneScythePatch));
-            Harmony.CreateAndPatchAll(typeof(ChicaneInternalRocketsPatch));
+            Harmony.CreateAndPatchAll(typeof(ChicaneInternalLynchpinx14Patch));
             Harmony.CreateAndPatchAll(typeof(MedusaLaserPatch));
 
             Logger.LogInfo("BVR - Balance and Variety Rework Mod Loaded!");
@@ -83,8 +84,8 @@ namespace BalanceAndVarietyRework
         private string GenerateConfigHash()
         {
             string combinedConfigs = $"{EnableIRMissilesBuff.Value}_{FlareCountMultiplier.Value}_{FlareRejectionMultiplier.Value}_" +
-                                     $"{EnableChicaneProxyGun.Value}_{EnableChicaneScythesSingle.Value}_{EnableChicaneScythesDouble.Value}_{EnableChicaneInternalRockets.Value}_" +
-                                     $"{EnableMedusaLaserBuff.Value}_{MedusaLaserPowerMultiplier.Value}";
+                                     $"{EnableChicaneProxyGun.Value}_{EnableChicaneScythesSingle.Value}_{EnableChicaneScythesDouble.Value}_{EnableChicaneInternalLynchpinx14.Value}_" +
+                                     $"{EnableMedusaLaserBuff.Value}_{MedusaLaserPowerDraw.Value}";
 
             using (var md5 = MD5.Create())
             {
@@ -301,30 +302,43 @@ namespace BalanceAndVarietyRework
 
 
 
-    // ====================================================================================================
-    // 3.5 CHICANE INTERNAL DOUBLE ROCKETS
+// ====================================================================================================
+    // 3.5 CHICANE INTERNAL BAY LYNCHPIN X14
     // Config Category: Chicane Balance
     // ====================================================================================================
 
     [HarmonyPatch(typeof(WeaponManager), "Awake")]
-    public static class ChicaneInternalRocketsPatch
+    public static class ChicaneInternalLynchpinx14Patch
     {
-        private static bool hasPatchedInternalRockets = false;
+        private static bool hasPatchedInternalLynchpinx14 = false;
+        private static GameObject prefabVault; // Holds our custom prefabs safely
 
         public static void Prefix()
         {
-            if (!Plugin.EnableChicaneInternalRockets.Value) return;
-            if (hasPatchedInternalRockets) return;
+            if (!Plugin.EnableChicaneInternalLynchpinx14.Value) return;
+            if (hasPatchedInternalLynchpinx14) return;
 
             var allMounts = Resources.FindObjectsOfTypeAll<WeaponMount>();
             WeaponMount singleMount = allMounts.FirstOrDefault(w => w.name == "RocketPod1_single");
 
             if (singleMount == null || singleMount.prefab == null) return;
 
-            // 1. Duplicate the GameObject and configure it
-            GameObject doublePrefab = UnityEngine.Object.Instantiate(singleMount.prefab);
+            // 1. Create a "Prefab Vault"
+            // This is a disabled root object. Anything placed inside will have activeInHierarchy = false.
+            if (prefabVault == null)
+            {
+                prefabVault = new GameObject("BVR_PrefabVault");
+                UnityEngine.Object.DontDestroyOnLoad(prefabVault);
+                prefabVault.SetActive(false); 
+                // HideAndDontSave completely hides the vault from RUE and the scene hierarchy
+                prefabVault.hideFlags = HideFlags.HideAndDontSave; 
+            }
+
+            // 2. Duplicate the GameObject as a child of the disabled vault
+            GameObject doublePrefab = UnityEngine.Object.Instantiate(singleMount.prefab, prefabVault.transform);
             doublePrefab.name = "RocketPod1_internal_double";
-            UnityEngine.Object.DontDestroyOnLoad(doublePrefab);
+            
+            // This satisfies the requirement: activeSelf = true, but active(InHierarchy) = false, so that the weapon will be visible when spawned, but it wont float randomly in the game world when the game starts.
             doublePrefab.SetActive(true);
 
             // Set the local position of the entire double pod prefab assembly
@@ -333,15 +347,15 @@ namespace BalanceAndVarietyRework
             Transform firstPod = doublePrefab.transform.Find("pod");
             if (firstPod != null)
             {
-                firstPod.localPosition = new Vector3(0.13f, -0.15f, 0.3f); // Adjust the position of the first pod
-                firstPod.localEulerAngles = Vector3.zero; // Rotate the first pod to Vector3(0, 0, 0)
+                firstPod.localPosition = new Vector3(0.13f, -0.15f, 0.3f); 
+                firstPod.localEulerAngles = Vector3.zero; 
                 Transform secondPod = UnityEngine.Object.Instantiate(firstPod.gameObject, doublePrefab.transform).transform;
                 secondPod.name = "pod";
-                secondPod.localPosition = new Vector3(-0.13f, -0.15f, 0.3f); // Position the second pod symmetrically
-                secondPod.localEulerAngles = Vector3.zero; // Rotate the second pod to Vector3(0, 0, 0)
+                secondPod.localPosition = new Vector3(-0.13f, -0.15f, 0.3f); 
+                secondPod.localEulerAngles = Vector3.zero; 
             }
 
-            // 2. Duplicate the WeaponMount and configure it
+            // 3. Duplicate the WeaponMount and configure it
             WeaponMount doubleMount = UnityEngine.Object.Instantiate(singleMount);
             doubleMount.name = "RocketPod1_internal_double";
             doubleMount.prefab = doublePrefab;
@@ -362,7 +376,6 @@ namespace BalanceAndVarietyRework
                 traverseMount.Property("missileBay").SetValue(true);
 
             // Fix for Network Lookup Index conflict destroying the ghost duplicate
-            // Generate a stable unique integer hash based on our new name string
             int customNetworkId = Mathf.Abs("RocketPod1_internal_double".GetHashCode()); 
             
             var backingField = traverseMount.Field("<INetworkDefinition.LookupIndex>k__BackingField");
@@ -371,14 +384,13 @@ namespace BalanceAndVarietyRework
                 backingField.SetValue(customNetworkId);
             }
             
-            // Just in case it reads directly from the property/interface later
             var interfaceProperty = traverseMount.Property("INetworkDefinition.LookupIndex");
             if (interfaceProperty.PropertyExists())
             {
                 interfaceProperty.SetValue(customNetworkId);
             }
 
-            // 3. Add to AttackHelo1 Internal Bays
+            // 4. Add to AttackHelo1 Internal Bays
             var allWeaponManagers = Resources.FindObjectsOfTypeAll<WeaponManager>();
             foreach (var wm in allWeaponManagers)
             {
@@ -391,17 +403,17 @@ namespace BalanceAndVarietyRework
                         if (internalBays.weaponOptions != null && !internalBays.weaponOptions.Contains(doubleMount))
                         {
                             internalBays.weaponOptions.Add(doubleMount);
-                            Debug.Log($"[ChicaneInternalRockets] Successfully injected double rockets into {wm.gameObject.name} internal bays.");
+                            Debug.Log($"[ChicaneInternalLynchpinx14] Successfully injected double rockets into {wm.gameObject.name} internal bays.");
                         }
                     }
                 }
             }
 
-            hasPatchedInternalRockets = true;
-            Debug.Log("[ChicaneInternalRockets] Master Prefab sweep and generation complete!");
+            hasPatchedInternalLynchpinx14 = true;
+            Debug.Log("[ChicaneInternalLynchpinx14] Master Prefab sweep and generation complete!");
         }
     }
-
+   
 
 
     // ====================================================================================================
@@ -460,8 +472,7 @@ namespace BalanceAndVarietyRework
 
                     if (powerField.FieldExists())
                     {
-                        float currentPower = powerField.GetValue<float>(); 
-                        powerField.SetValue(currentPower * Plugin.MedusaLaserPowerMultiplier.Value); 
+                        powerField.SetValue(Plugin.MedusaLaserPowerDraw.Value); 
 
                         comp.gameObject.AddComponent<ModifiedStatsFlag>();
 
