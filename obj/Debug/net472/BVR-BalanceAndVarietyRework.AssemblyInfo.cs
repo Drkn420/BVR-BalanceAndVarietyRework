@@ -14,7 +14,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyDescriptionAttribute("Nuclear Option - Balance and Variety Rework")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.7.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.7+b06188ac4d0f286d018b553e3fcad3724c2a2888")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.7+f0d6c180c35610617027cd78629c1c389c159864")]
 [assembly: System.Reflection.AssemblyProductAttribute("BVR-BalanceAndVarietyRework-Dev")]
 [assembly: System.Reflection.AssemblyTitleAttribute("BVR-BalanceAndVarietyRework-Dev")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.7.0")]
