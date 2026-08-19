@@ -19,12 +19,23 @@ namespace BalanceAndVarietyRework
         // Expose the dynamically generated version hash for multiplayer desync checks
         public static string FullVersionWithHash { get; private set; }
 
+        // ==========================================================================
         // Configuration Entries
-
+        // ==========================================================================
+       
         // Missile Balance Entries
+
+        // IR Missiles Buff Entries
         public static ConfigEntry<bool> EnableIRMissilesBuff;
         public static ConfigEntry<float> FlareCountMultiplier;
         public static ConfigEntry<float> FlareRejectionMultiplier;
+
+        // R9 / RAM45 SARH Lock Persistence Entries
+        public static ConfigEntry<bool> EnableR9LockPersistenceBuff;
+        public static ConfigEntry<float> R9LockPersistenceValue;
+        public static ConfigEntry<bool> EnableRAM45LockPersistenceBuff;
+        public static ConfigEntry<float> RAM45LockPersistenceValue;
+        
 
         // Cricket Balance Entries
         public static ConfigEntry<bool> EnableCricketLynchpinx14Double;
@@ -86,9 +97,19 @@ namespace BalanceAndVarietyRework
             // 2. Bind functional configs
 
             // Missile Balance Changes
+            
+            // IR Missiles Buff
             EnableIRMissilesBuff = Config.Bind("Missile Balance Changes", "Enable IR Missiles Buff", true, "Master toggle to enable the custom flare rejection and flare count multipliers.");
             FlareCountMultiplier = Config.Bind("Missile Balance Changes", "Flare Count Multiplier", 2.0f, "Multiplies the total number of flares on all aircraft (e.g., 2.0 = double flares, 0.5 = half flares).");
             FlareRejectionMultiplier = Config.Bind("Missile Balance Changes", "Flare Rejection Multiplier", 2.0f, "Multiplies the flare rejection stat on all IR missiles. Higher values make them harder to decoy (e.g., 2.0 = double rejection).");
+
+            // R9 Lock Persistence Change
+            EnableR9LockPersistenceBuff = Config.Bind("Missile Balance Changes", "Enable R9 Lock Persistence Buff", true, "Master toggle to enable the custom R9 lock persistence value.");
+            R9LockPersistenceValue = Config.Bind("Missile Balance Changes", "R9 Lock Persistence Value", 600.0f, "Sets the lock persistence duration for the R9's SARH seeker, measured in seconds. Higher values keep the lock active for longer after the target sucessfully jams or is obscured. 600 effectively makes it relock infinitely.");
+
+            // RAM45 Lock Persistence Change
+            EnableRAM45LockPersistenceBuff = Config.Bind("Missile Balance Changes", "Enable RAM45 Lock Persistence Buff", true, "Master toggle to enable the custom RAM45 lock persistence value.");
+            RAM45LockPersistenceValue = Config.Bind("Missile Balance Changes", "RAM45 Lock Persistence Value", 600.0f, "Sets the lock persistence duration for the RAM45's SARH seeker, measured in seconds. Higher values keep the lock active for longer after the target sucessfully jams or is obscured. 600 effectively makes it relock infinitely.");
 
             // Cricket Changes
             EnableCricketLynchpinx14Double = Config.Bind("CI-22 Cricket Changes", "Enable Cricket Lynchpin x14 Double", true, "Enables the AGR-18 Lynchpin x14 double rocket pod on the Cricket's hardpoint sets 2 and 3.");
@@ -108,8 +129,8 @@ namespace BalanceAndVarietyRework
 
             // Chicane Changes
             EnableChicaneProxyGun = Config.Bind("SAH-46 Chicane Changes", "Enable Chicane Proximity Fuse 30mm Gun", true, "Enables the proximity fuse on the Chicane's nosegun.");
-            EnableChicaneScythesSingle = Config.Bind("SAH-46 Chicane Changes", "Enable Chicane Inner Wing Scythe x1", false, "Enables AAM-24 Single mounts onto the Chicane's inner stub pylons.");
-            EnableChicaneScythesDouble = Config.Bind("SAH-46 Chicane Changes", "Enable Chicane Inner Wing Scythe x2", false, "Enables AAM-24 Double mounts onto the Chicane's inner stub pylons.");
+            EnableChicaneScythesSingle = Config.Bind("SAH-46 Chicane Changes", "Enable Chicane Inner Wing Scythe x1", true, "Enables AAM-24 Single mounts onto the Chicane's inner stub pylons.");
+            EnableChicaneScythesDouble = Config.Bind("SAH-46 Chicane Changes", "Enable Chicane Inner Wing Scythe x2", true, "Enables AAM-24 Double mounts onto the Chicane's inner stub pylons.");
             EnableChicaneInternalLynchpinx14 = Config.Bind("SAH-46 Chicane Changes", "Enable Chicane Internal Lynchpin x14", true, "Enables AGR-18 Lynchpin x14 rocket pod in the Chicane's internal bays.");
             EnableChicaneInternalKingpinx8 = Config.Bind("SAH-46 Chicane Changes", "Enable Chicane Internal Kingpin x8", true, "Enables AGR-24 Kingpin x8 rocket pod in the Chicane's internal bays.");
             EnableChicaneBayPylonSymmetryFix = Config.Bind("SAH-46 Chicane Changes", "Enable Chicane Bay Pylon Symmetry Fix", true, "Centers the Chicane's right internal weapon bay pylon by setting its local X position to 0.");
@@ -149,6 +170,7 @@ namespace BalanceAndVarietyRework
 
             // Missile Balance Changes
             Harmony.CreateAndPatchAll(typeof(StatsPatch));
+            Harmony.CreateAndPatchAll(typeof(SARHLockPersistencePatch));
 
             // Cricket Changes
             Harmony.CreateAndPatchAll(typeof(CricketLynchpinx14DoublePatch));
@@ -200,7 +222,7 @@ namespace BalanceAndVarietyRework
         // Generates a short, deterministic alphanumeric hash based on the current config values
         private string GenerateConfigHash()
         {
-            string combinedConfigs = $"{EnableIRMissilesBuff.Value}_{FlareCountMultiplier.Value}_{FlareRejectionMultiplier.Value}_" +
+            string combinedConfigs = $"{EnableIRMissilesBuff.Value}_{FlareCountMultiplier.Value}_{FlareRejectionMultiplier.Value}_{EnableR9LockPersistenceBuff.Value}_{R9LockPersistenceValue.Value}_{EnableRAM45LockPersistenceBuff.Value}_{RAM45LockPersistenceValue.Value}_" +
                 $"{EnableCricketLynchpinx14Double.Value}_{EnableCricketKingpinx8Double.Value}_" +
                 $"{EnableCompassLynchpinx14Double.Value}_{EnableCompassKingpinx8Double.Value}_" +
                 $"{EnableVagrantLynchpinx14Double.Value}_{EnableVagrantKingpinx8Double.Value}_" +
@@ -211,7 +233,6 @@ namespace BalanceAndVarietyRework
                 $"{EnableTarantulaLynchpinx14Double.Value}_{EnableTarantulaKingpinx8Double.Value}_" +
                 $"{EnableIfritLynchpinx14Double.Value}_{EnableIfritKingpinx8Double.Value}_" +
                 $"{EnableMedusaLaserBuff.Value}_{MedusaLaserPowerDraw.Value}_{EnableMedusaLynchpinx14Double.Value}_{EnableMedusaKingpinx8Double.Value}";
-
             using (var md5 = MD5.Create())
             {
                 byte[] hashBytes = md5.ComputeHash(Encoding.UTF8.GetBytes(combinedConfigs));
@@ -293,6 +314,107 @@ namespace BalanceAndVarietyRework
             }
         }
     }
+
+
+
+    // ====================================================================================================
+    // SARH LOCK PERSISTENCE
+    // Config Category: Missile Balance Changes
+    // ====================================================================================================
+    [HarmonyPatch(typeof(WeaponManager), "Awake")]
+    public static class SARHLockPersistencePatch
+    {
+        private static bool hasPatchedR9LockPersistence = false;
+        private static bool hasPatchedRAM45LockPersistence = false;
+
+        public static void Prefix()
+        {
+            if (!Plugin.EnableR9LockPersistenceBuff.Value && !Plugin.EnableRAM45LockPersistenceBuff.Value) return;
+
+            if (Plugin.EnableR9LockPersistenceBuff.Value && !hasPatchedR9LockPersistence)
+            {
+                hasPatchedR9LockPersistence = ApplySARHLockPersistence("SAM_Radar2", Plugin.R9LockPersistenceValue.Value, "R9LockPersistence");
+            }
+
+            if (Plugin.EnableRAM45LockPersistenceBuff.Value && !hasPatchedRAM45LockPersistence)
+            {
+                hasPatchedRAM45LockPersistence = ApplySARHLockPersistence("SAM_Radar1", Plugin.RAM45LockPersistenceValue.Value, "RAM45LockPersistence");
+            }
+        }
+
+        private static bool ApplySARHLockPersistence(string targetName, float lockPersistence, string logTag)
+        {
+            bool success = false;
+
+            var allGameObjects = Resources.FindObjectsOfTypeAll<GameObject>();
+            foreach (var go in allGameObjects)
+            {
+                if (go == null) continue;
+
+                // Handles both prefab assets and scene instances.
+                string cleanedName = go.name.Replace("(Clone)", "");
+                if (cleanedName != targetName) continue;
+
+                var allComponents = go.GetComponentsInChildren<Component>(true);
+                foreach (var comp in allComponents)
+                {
+                    if (comp == null) continue;
+
+                    var type = comp.GetType();
+                    if (type == null || type.Name != "SARHSeeker") continue;
+
+                    if (comp.gameObject.GetComponent<ModifiedStatsFlag>() != null)
+                    {
+                        success = true;
+                        continue;
+                    }
+
+                    if (TrySetLockPersistence(comp, lockPersistence))
+                    {
+                        comp.gameObject.AddComponent<ModifiedStatsFlag>();
+                        success = true;
+                        Debug.Log($"[{logTag}] Successfully set lockPersistence={lockPersistence} on {go.name}.");
+                    }
+                }
+            }
+
+            if (!success)
+            {
+                Debug.LogWarning($"[{logTag}] Could not find SARHSeeker.lockPersistence on {targetName}.");
+            }
+            else
+            {
+                Debug.Log($"[{logTag}] Master Prefab sweep complete!");
+            }
+
+            return success;
+        }
+
+        private static bool TrySetLockPersistence(object target, float value)
+        {
+            var traverse = Traverse.Create(target);
+
+            // Try field first.
+            var field = traverse.Field("lockPersistence");
+            if (field.FieldExists())
+            {
+                field.SetValue(value);
+                return true;
+            }
+
+            // Fallback if lockPersistence is exposed as a property.
+            var property = traverse.Property("lockPersistence");
+            if (property.PropertyExists())
+            {
+                property.SetValue(value);
+                return true;
+            }
+
+            return false;
+        }
+    }
+
+
 
     // ====================================================================================================
     // SHARED PREFAB VAULT
