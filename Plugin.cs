@@ -22,7 +22,7 @@ namespace BalanceAndVarietyRework
         // ==========================================================================
         // Configuration Entries
         // ==========================================================================
-       
+
         // Missile Balance Entries
 
         // IR Missiles Buff Entries
@@ -35,7 +35,15 @@ namespace BalanceAndVarietyRework
         public static ConfigEntry<float> R9LockPersistenceValue;
         public static ConfigEntry<bool> EnableRAM45LockPersistenceBuff;
         public static ConfigEntry<float> RAM45LockPersistenceValue;
-        
+
+        // R9 / RAM45 SARH Relock Entries
+        public static ConfigEntry<bool> EnableR9SARHRelock;
+        public static ConfigEntry<float> R9SARHRelockDelay;
+        public static ConfigEntry<int> R9SARHRelockAttempts;
+
+        public static ConfigEntry<bool> EnableRAM45SARHRelock;
+        public static ConfigEntry<float> RAM45SARHRelockDelay;
+        public static ConfigEntry<int> RAM45SARHRelockAttempts;
 
         // Cricket Balance Entries
         public static ConfigEntry<bool> EnableCricketLynchpinx14Double;
@@ -97,7 +105,7 @@ namespace BalanceAndVarietyRework
             // 2. Bind functional configs
 
             // Missile Balance Changes
-            
+
             // IR Missiles Buff
             EnableIRMissilesBuff = Config.Bind("Missile Balance Changes", "Enable IR Missiles Buff", true, "Master toggle to enable the custom flare rejection and flare count multipliers.");
             FlareCountMultiplier = Config.Bind("Missile Balance Changes", "Flare Count Multiplier", 2.0f, "Multiplies the total number of flares on all aircraft (e.g., 2.0 = double flares, 0.5 = half flares).");
@@ -105,11 +113,31 @@ namespace BalanceAndVarietyRework
 
             // R9 Lock Persistence Change
             EnableR9LockPersistenceBuff = Config.Bind("Missile Balance Changes", "Enable R9 Lock Persistence Buff", true, "Master toggle to enable the custom R9 lock persistence value.");
-            R9LockPersistenceValue = Config.Bind("Missile Balance Changes", "R9 Lock Persistence Value", 600.0f, "Sets the lock persistence duration for the R9's SARH seeker, measured in seconds. Higher values keep the lock active for longer after the target sucessfully jams or is obscured. 600 effectively makes it relock infinitely.");
+            R9LockPersistenceValue = Config.Bind("Missile Balance Changes", "R9 Lock Persistence Value", 3.0f, "Sets the lock persistence duration for the R9's SARH seeker, measured in seconds. Higher values keep the lock active for longer after the target sucessfully jams or is obscured. 600 effectively makes it relock infinitely.");
 
             // RAM45 Lock Persistence Change
             EnableRAM45LockPersistenceBuff = Config.Bind("Missile Balance Changes", "Enable RAM45 Lock Persistence Buff", true, "Master toggle to enable the custom RAM45 lock persistence value.");
-            RAM45LockPersistenceValue = Config.Bind("Missile Balance Changes", "RAM45 Lock Persistence Value", 600.0f, "Sets the lock persistence duration for the RAM45's SARH seeker, measured in seconds. Higher values keep the lock active for longer after the target sucessfully jams or is obscured. 600 effectively makes it relock infinitely.");
+            RAM45LockPersistenceValue = Config.Bind("Missile Balance Changes", "RAM45 Lock Persistence Value", 3.0f, "Sets the lock persistence duration for the RAM45's SARH seeker, measured in seconds. Higher values keep the lock active for longer after the target sucessfully jams or is obscured. 600 effectively makes it relock infinitely.");
+
+            // R9 SARH Relock Change
+            EnableR9SARHRelock = Config.Bind("Missile Balance Changes", "Enable R9 SARH Relock", true,
+                "Master toggle to enable automatic R9 SARH relock attempts after lockPersistence allows the seeker to drop its target.");
+
+            R9SARHRelockDelay = Config.Bind("Missile Balance Changes", "R9 SARH Relock Delay", 3.0f,
+                "Seconds the R9 waits after it is left without a lock before attempting to relock. This timer starts after lockPersistence expires.");
+
+            R9SARHRelockAttempts = Config.Bind("Missile Balance Changes", "R9 SARH Relock Attempts", 0,
+                "Number of R9 relock attempts. 0 = infinite attempts.");
+
+            // RAM45 SARH Relock Change
+            EnableRAM45SARHRelock = Config.Bind("Missile Balance Changes", "Enable RAM45 SARH Relock", true,
+                "Master toggle to enable automatic RAM45 SARH relock attempts after lockPersistence allows the seeker to drop its target.");
+
+            RAM45SARHRelockDelay = Config.Bind("Missile Balance Changes", "RAM45 SARH Relock Delay", 3.0f,
+                "Seconds the RAM45 waits after it is left without a lock before attempting to relock. This timer starts after lockPersistence expires.");
+
+            RAM45SARHRelockAttempts = Config.Bind("Missile Balance Changes", "RAM45 SARH Relock Attempts", 0,
+                "Number of RAM45 relock attempts. 0 = infinite attempts.");
 
             // Cricket Changes
             EnableCricketLynchpinx14Double = Config.Bind("CI-22 Cricket Changes", "Enable Cricket Lynchpin x14 Double", true, "Enables the AGR-18 Lynchpin x14 double rocket pod on the Cricket's hardpoint sets 2 and 3.");
@@ -163,7 +191,6 @@ namespace BalanceAndVarietyRework
 
             // 4. Update the notice retroactively with the generated hash
             hashDisplay.Value = configHash;
-
             Logger.LogInfo($"Mod Version Loaded: {FullVersionWithHash}");
 
             // 5. Register all Harmony patches
@@ -171,6 +198,7 @@ namespace BalanceAndVarietyRework
             // Missile Balance Changes
             Harmony.CreateAndPatchAll(typeof(StatsPatch));
             Harmony.CreateAndPatchAll(typeof(SARHLockPersistencePatch));
+            Harmony.CreateAndPatchAll(typeof(SARHRelockPatch));
 
             // Cricket Changes
             Harmony.CreateAndPatchAll(typeof(CricketLynchpinx14DoublePatch));
@@ -222,7 +250,8 @@ namespace BalanceAndVarietyRework
         // Generates a short, deterministic alphanumeric hash based on the current config values
         private string GenerateConfigHash()
         {
-            string combinedConfigs = $"{EnableIRMissilesBuff.Value}_{FlareCountMultiplier.Value}_{FlareRejectionMultiplier.Value}_{EnableR9LockPersistenceBuff.Value}_{R9LockPersistenceValue.Value}_{EnableRAM45LockPersistenceBuff.Value}_{RAM45LockPersistenceValue.Value}_" +
+            string combinedConfigs =
+                $"{EnableIRMissilesBuff.Value}_{FlareCountMultiplier.Value}_{FlareRejectionMultiplier.Value}_{EnableR9LockPersistenceBuff.Value}_{R9LockPersistenceValue.Value}_{EnableRAM45LockPersistenceBuff.Value}_{RAM45LockPersistenceValue.Value}_{EnableR9SARHRelock.Value}_{R9SARHRelockDelay.Value}_{R9SARHRelockAttempts.Value}_{EnableRAM45SARHRelock.Value}_{RAM45SARHRelockDelay.Value}_{RAM45SARHRelockAttempts.Value}_" +
                 $"{EnableCricketLynchpinx14Double.Value}_{EnableCricketKingpinx8Double.Value}_" +
                 $"{EnableCompassLynchpinx14Double.Value}_{EnableCompassKingpinx8Double.Value}_" +
                 $"{EnableVagrantLynchpinx14Double.Value}_{EnableVagrantKingpinx8Double.Value}_" +
@@ -233,6 +262,7 @@ namespace BalanceAndVarietyRework
                 $"{EnableTarantulaLynchpinx14Double.Value}_{EnableTarantulaKingpinx8Double.Value}_" +
                 $"{EnableIfritLynchpinx14Double.Value}_{EnableIfritKingpinx8Double.Value}_" +
                 $"{EnableMedusaLaserBuff.Value}_{MedusaLaserPowerDraw.Value}_{EnableMedusaLynchpinx14Double.Value}_{EnableMedusaKingpinx8Double.Value}";
+
             using (var md5 = MD5.Create())
             {
                 byte[] hashBytes = md5.ComputeHash(Encoding.UTF8.GetBytes(combinedConfigs));
@@ -290,6 +320,7 @@ namespace BalanceAndVarietyRework
 
                 int currentMax = traverse.Field("maxAmmo").GetValue<int>();
                 int currentAmmo = traverse.Field("ammo").GetValue<int>();
+
                 float multiplier = Plugin.FlareCountMultiplier.Value;
 
                 traverse.Field("maxAmmo").SetValue(Mathf.RoundToInt(currentMax * multiplier));
@@ -314,8 +345,6 @@ namespace BalanceAndVarietyRework
             }
         }
     }
-
-
 
     // ====================================================================================================
     // SARH LOCK PERSISTENCE
@@ -347,6 +376,7 @@ namespace BalanceAndVarietyRework
             bool success = false;
 
             var allGameObjects = Resources.FindObjectsOfTypeAll<GameObject>();
+
             foreach (var go in allGameObjects)
             {
                 if (go == null) continue;
@@ -356,6 +386,7 @@ namespace BalanceAndVarietyRework
                 if (cleanedName != targetName) continue;
 
                 var allComponents = go.GetComponentsInChildren<Component>(true);
+
                 foreach (var comp in allComponents)
                 {
                     if (comp == null) continue;
@@ -414,7 +445,323 @@ namespace BalanceAndVarietyRework
         }
     }
 
+    // ====================================================================================================
+    // SARH RELOCK
+    // Config Category: Missile Balance Changes
+    // ====================================================================================================
+    public class SARHRelockController : MonoBehaviour
+    {
+        private SARHSeeker seeker;
+        private Traverse seekerTraverse;
+        private Missile cachedMissile;
 
+        private float relockDelay = 3f;
+        private int maxAttempts = 0;
+        private float relockTimer = 0f;
+        private bool waitingForRelock = false;
+        private int attemptsUsed = 0;
+        private bool initialized = false;
+
+        public void Setup(SARHSeeker targetSeeker, float delay, int attempts)
+        {
+            seeker = targetSeeker;
+            seekerTraverse = Traverse.Create(seeker);
+
+            relockDelay = Mathf.Max(0f, delay);
+            maxAttempts = Mathf.Max(0, attempts);
+
+            attemptsUsed = 0;
+            waitingForRelock = false;
+            relockTimer = 0f;
+            initialized = false;
+            cachedMissile = null;
+        }
+
+        private void Update()
+        {
+            if (seeker == null)
+            {
+                UnityEngine.Object.Destroy(this);
+                return;
+            }
+
+            if (seekerTraverse == null)
+            {
+                seekerTraverse = Traverse.Create(seeker);
+            }
+
+            if (!initialized)
+            {
+                initialized = true;
+                return;
+            }
+
+            Missile missile = GetMissile();
+            bool isLocked = missile != null && missile.seekerMode == Missile.SeekerMode.activeLock;
+
+            if (isLocked)
+            {
+                attemptsUsed = 0;
+                waitingForRelock = false;
+                relockTimer = 0f;
+                return;
+            }
+
+            Transform currentTargetTransform = GetField<Transform>("targetTransform");
+            Unit targetUnit = GetField<Unit>("targetUnit");
+
+            if (targetUnit == null)
+            {
+                waitingForRelock = false;
+                return;
+            }
+
+            if (currentTargetTransform != null)
+            {
+                waitingForRelock = false;
+                relockTimer = 0f;
+                return;
+            }
+
+            if (!waitingForRelock)
+            {
+                if (CanAttemptRelock())
+                {
+                    waitingForRelock = true;
+                    relockTimer = Mathf.Max(0f, relockDelay);
+                }
+            }
+            else
+            {
+                DecayJam(Time.deltaTime);
+
+                relockTimer -= Time.deltaTime;
+
+                if (relockTimer <= 0f)
+                {
+                    TryRelock();
+                }
+            }
+        }
+
+        private bool CanAttemptRelock()
+        {
+            return maxAttempts == 0 || attemptsUsed < maxAttempts;
+        }
+
+        private void TryRelock()
+        {
+            attemptsUsed++;
+
+            // Immediate jam decay when the relock attempt is made.
+            DecayJam(Mathf.Max(Time.deltaTime, 1f));
+
+            Unit targetUnit = GetField<Unit>("targetUnit");
+            if (targetUnit == null || targetUnit.disabled)
+            {
+                waitingForRelock = false;
+                return;
+            }
+
+            Transform newTargetTransform = targetUnit.GetRandomPart();
+            if (newTargetTransform == null)
+            {
+                if (CanAttemptRelock())
+                {
+                    relockTimer = Mathf.Max(0f, relockDelay);
+                }
+                else
+                {
+                    waitingForRelock = false;
+                }
+
+                return;
+            }
+
+            SetField("targetTransform", newTargetTransform);
+            SetField("timeWithoutTrack", 0f);
+            SetField("lastTrackingCheck", 0f);
+
+            TryResubscribeJamEvent();
+
+            waitingForRelock = false;
+        }
+
+        private void DecayJam(float deltaTime)
+        {
+            float jam = GetField<float>("jamAccumulation");
+
+            if (jam <= 0f)
+            {
+                if (jam != 0f)
+                {
+                    SetField("jamAccumulation", 0f);
+                }
+
+                return;
+            }
+
+            float tolerance = GetField<float>("jamTolerance");
+
+            jam -= Mathf.Max(jam, 0.2f) * Mathf.Max(tolerance, 0.1f) * deltaTime;
+            SetField("jamAccumulation", Mathf.Clamp01(jam));
+        }
+
+        private Missile GetMissile()
+        {
+            if (cachedMissile != null)
+            {
+                return cachedMissile;
+            }
+
+            if (seekerTraverse == null)
+            {
+                return null;
+            }
+
+            var field = seekerTraverse.Field("missile");
+            if (field.FieldExists())
+            {
+                cachedMissile = field.GetValue<Missile>();
+                return cachedMissile;
+            }
+
+            var property = seekerTraverse.Property("missile");
+            if (property.PropertyExists())
+            {
+                cachedMissile = property.GetValue<Missile>();
+            }
+
+            return cachedMissile;
+        }
+
+        private T GetField<T>(string fieldName)
+        {
+            if (seekerTraverse == null)
+            {
+                return default(T);
+            }
+
+            var field = seekerTraverse.Field(fieldName);
+
+            if (!field.FieldExists())
+            {
+                return default(T);
+            }
+
+            return field.GetValue<T>();
+        }
+
+        private void SetField<T>(string fieldName, T value)
+        {
+            if (seekerTraverse == null)
+            {
+                return;
+            }
+
+            var field = seekerTraverse.Field(fieldName);
+
+            if (field.FieldExists())
+            {
+                field.SetValue(value);
+            }
+        }
+
+        private void TryResubscribeJamEvent()
+        {
+            try
+            {
+                Missile missile = GetMissile();
+                if (missile == null || seeker == null)
+                {
+                    return;
+                }
+                var method = AccessTools.Method(typeof(SARHSeeker), "SARHSeeker_OnJam", new Type[] { typeof(Unit.JamEventArgs) });
+                if (method == null)
+                {
+                    return;
+                }
+
+                // FIX: Use standard Reflection to find the event, as AccessTools.Event does not exist.
+                var eventInfo = missile.GetType().GetEvent("onJam", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
+                
+                if (eventInfo != null)
+                {
+                    var handler = Delegate.CreateDelegate(eventInfo.EventHandlerType, seeker, method);
+                    eventInfo.RemoveEventHandler(missile, handler);
+                    eventInfo.AddEventHandler(missile, handler);
+                    return;
+                }
+                
+                // Fallback: If 'onJam' is exposed as a public Delegate field instead of a C# event
+                var field = AccessTools.Field(missile.GetType(), "onJam");
+                if (field != null && typeof(Delegate).IsAssignableFrom(field.FieldType))
+                {
+                    var currentDelegate = field.GetValue(missile) as Delegate;
+                    var handler = Delegate.CreateDelegate(field.FieldType, seeker, method);
+                    if (currentDelegate != null)
+                    {
+                        currentDelegate = Delegate.Remove(currentDelegate, handler);
+                    }
+                    currentDelegate = Delegate.Combine(currentDelegate, handler);
+                    field.SetValue(missile, currentDelegate);
+                }
+            }
+            catch
+            {
+                // If the event cannot be reattached, allow the relock attempt to continue.
+            }
+        }
+    }
+    
+    [HarmonyPatch(typeof(SARHSeeker), "Initialize", new Type[] { typeof(Unit), typeof(GlobalPosition) })]
+    public static class SARHRelockPatch
+    {
+        public static void Postfix(SARHSeeker __instance, Unit target)
+        {
+            if (__instance == null || target == null) return;
+
+            if (!TryGetRelockSettings(__instance, out float delay, out int attempts)) return;
+
+            var controller = __instance.GetComponent<SARHRelockController>();
+            if (controller == null)
+            {
+                controller = __instance.gameObject.AddComponent<SARHRelockController>();
+            }
+
+            controller.Setup(__instance, delay, attempts);
+        }
+
+        private static bool TryGetRelockSettings(SARHSeeker seeker, out float delay, out int attempts)
+        {
+            delay = 0f;
+            attempts = 0;
+
+            if (seeker == null) return false;
+
+            string rootName = seeker.transform != null && seeker.transform.root != null
+                ? seeker.transform.root.gameObject.name
+                : seeker.gameObject.name;
+
+            rootName = rootName.Replace("(Clone)", "");
+
+            if (rootName.Contains("SAM_Radar2") && Plugin.EnableR9SARHRelock.Value)
+            {
+                delay = Mathf.Max(0f, Plugin.R9SARHRelockDelay.Value);
+                attempts = Mathf.Max(0, Plugin.R9SARHRelockAttempts.Value);
+                return true;
+            }
+
+            if (rootName.Contains("SAM_Radar1") && Plugin.EnableRAM45SARHRelock.Value)
+            {
+                delay = Mathf.Max(0f, Plugin.RAM45SARHRelockDelay.Value);
+                attempts = Mathf.Max(0, Plugin.RAM45SARHRelockAttempts.Value);
+                return true;
+            }
+
+            return false;
+        }
+    }
 
     // ====================================================================================================
     // SHARED PREFAB VAULT
@@ -512,6 +859,7 @@ namespace BalanceAndVarietyRework
             SetNetworkLookupIndex(traverseMount, "RocketPod1_double");
 
             externalLynchpinx14DoubleMount = doubleMount;
+
             Debug.Log("[ExternalLynchpinx14Double] Custom double Lynchpin prefab and mount generation complete!");
 
             return externalLynchpinx14DoubleMount;
@@ -584,6 +932,7 @@ namespace BalanceAndVarietyRework
             SetNetworkLookupIndex(traverseMount, "Rocket2_4Podx2");
 
             externalKingpinx8DoubleMount = doubleMount;
+
             Debug.Log("[ExternalKingpinx8Double] Custom double Kingpin prefab and mount generation complete!");
 
             return externalKingpinx8DoubleMount;
@@ -652,6 +1001,7 @@ namespace BalanceAndVarietyRework
             SetNetworkLookupIndex(traverseMount, "RocketPod1_double_internal");
 
             internalLynchpinx14DoubleMount = doubleMount;
+
             Debug.Log("[InternalLynchpinx14Double] Custom internal double Lynchpin prefab and mount generation complete!");
 
             return internalLynchpinx14DoubleMount;
@@ -734,6 +1084,7 @@ namespace BalanceAndVarietyRework
             SetNetworkLookupIndex(traverseMount, "Rocket2_4Podx2_internal");
 
             internalKingpinx8DoubleMount = doubleMount;
+
             Debug.Log("[InternalKingpinx8Double] Custom internal double Kingpin prefab and mount generation complete!");
 
             return internalKingpinx8DoubleMount;
@@ -839,6 +1190,7 @@ namespace BalanceAndVarietyRework
 
             // Add to COIN hardpoint sets 2 and 3
             var allWeaponManagers = Resources.FindObjectsOfTypeAll<WeaponManager>();
+
             foreach (var wm in allWeaponManagers)
             {
                 if (wm == null || wm.transform == null || wm.transform.root == null) continue;
@@ -894,6 +1246,7 @@ namespace BalanceAndVarietyRework
 
             // Add to COIN hardpoint sets 2 and 3
             var allWeaponManagers = Resources.FindObjectsOfTypeAll<WeaponManager>();
+
             foreach (var wm in allWeaponManagers)
             {
                 if (wm == null || wm.transform == null || wm.transform.root == null) continue;
@@ -954,6 +1307,7 @@ namespace BalanceAndVarietyRework
 
             // Add to trainer hardpoint set 1
             var allWeaponManagers = Resources.FindObjectsOfTypeAll<WeaponManager>();
+
             foreach (var wm in allWeaponManagers)
             {
                 if (wm == null || wm.transform == null || wm.transform.root == null) continue;
@@ -1002,6 +1356,7 @@ namespace BalanceAndVarietyRework
 
             // Add to trainer hardpoint set 1
             var allWeaponManagers = Resources.FindObjectsOfTypeAll<WeaponManager>();
+
             foreach (var wm in allWeaponManagers)
             {
                 if (wm == null || wm.transform == null || wm.transform.root == null) continue;
@@ -1055,6 +1410,7 @@ namespace BalanceAndVarietyRework
 
             // Add to VTOLTrainer1 hardpoint set 3
             var allWeaponManagers = Resources.FindObjectsOfTypeAll<WeaponManager>();
+
             foreach (var wm in allWeaponManagers)
             {
                 if (wm == null || wm.transform == null || wm.transform.root == null) continue;
@@ -1103,6 +1459,7 @@ namespace BalanceAndVarietyRework
 
             // Add to VTOLTrainer1 hardpoint set 3
             var allWeaponManagers = Resources.FindObjectsOfTypeAll<WeaponManager>();
+
             foreach (var wm in allWeaponManagers)
             {
                 if (wm == null || wm.transform == null || wm.transform.root == null) continue;
@@ -1156,6 +1513,7 @@ namespace BalanceAndVarietyRework
 
             // Add to UtilityHelo1 hardpoint sets 0 and 1
             var allWeaponManagers = Resources.FindObjectsOfTypeAll<WeaponManager>();
+
             foreach (var wm in allWeaponManagers)
             {
                 if (wm == null || wm.transform == null || wm.transform.root == null) continue;
@@ -1211,6 +1569,7 @@ namespace BalanceAndVarietyRework
 
             // Add to UtilityHelo1 hardpoint sets 0 and 1
             var allWeaponManagers = Resources.FindObjectsOfTypeAll<WeaponManager>();
+
             foreach (var wm in allWeaponManagers)
             {
                 if (wm == null || wm.transform == null || wm.transform.root == null) continue;
@@ -1267,6 +1626,7 @@ namespace BalanceAndVarietyRework
             if (hasPatchedGun) return;
 
             var allWeaponManagers = Resources.FindObjectsOfTypeAll<WeaponManager>();
+
             foreach (var wm in allWeaponManagers)
             {
                 if (wm == null || wm.transform == null || wm.transform.root == null) continue;
@@ -1274,6 +1634,7 @@ namespace BalanceAndVarietyRework
                 if (wm.transform.root.name.Contains("AttackHelo1"))
                 {
                     bool success = TryPatchProxyGun(wm.transform.root.gameObject);
+
                     if (success)
                     {
                         Debug.Log($"[ChicaneProxyGun] Successfully enabled proxy timer on: {wm.gameObject.name}");
@@ -1292,26 +1653,28 @@ namespace BalanceAndVarietyRework
             foreach (var comp in allComponents)
             {
                 var compTraverse = Traverse.Create(comp);
-                var stationsField = compTraverse.Field("weaponStations");
 
+                var stationsField = compTraverse.Field("weaponStations");
                 if (stationsField.FieldExists())
                 {
                     var stationsList = stationsField.GetValue<IList>();
+
                     if (stationsList != null && stationsList.Count > 0)
                     {
                         var firstStation = stationsList[0];
                         var stationTraverse = Traverse.Create(firstStation);
-                        var weaponsField = stationTraverse.Field("Weapons");
 
+                        var weaponsField = stationTraverse.Field("Weapons");
                         if (weaponsField.FieldExists())
                         {
                             var weaponsList = weaponsField.GetValue<IList>();
+
                             if (weaponsList != null && weaponsList.Count > 0)
                             {
                                 var firstWeapon = weaponsList[0];
                                 var weaponTraverse = Traverse.Create(firstWeapon);
-                                var proxyTimerField = weaponTraverse.Field("proximityTimer");
 
+                                var proxyTimerField = weaponTraverse.Field("proximityTimer");
                                 if (proxyTimerField.FieldExists())
                                 {
                                     proxyTimerField.SetValue(true);
@@ -1348,6 +1711,7 @@ namespace BalanceAndVarietyRework
             if (aam2Single == null || aam2Double == null) return;
 
             var allWeaponManagers = Resources.FindObjectsOfTypeAll<WeaponManager>();
+
             foreach (var wm in allWeaponManagers)
             {
                 if (wm == null || wm.transform == null || wm.transform.root == null) continue;
@@ -1404,6 +1768,7 @@ namespace BalanceAndVarietyRework
 
             // Add to AttackHelo1 Internal Bays
             var allWeaponManagers = Resources.FindObjectsOfTypeAll<WeaponManager>();
+
             foreach (var wm in allWeaponManagers)
             {
                 if (wm == null || wm.transform == null || wm.transform.root == null) continue;
@@ -1413,6 +1778,7 @@ namespace BalanceAndVarietyRework
                     if (wm.hardpointSets != null && wm.hardpointSets.Length > 1)
                     {
                         var internalBays = wm.hardpointSets[1];
+
                         if (internalBays != null && internalBays.weaponOptions != null && !internalBays.weaponOptions.Contains(doubleMount))
                         {
                             internalBays.weaponOptions.Add(doubleMount);
@@ -1445,6 +1811,7 @@ namespace BalanceAndVarietyRework
 
             // Add to AttackHelo1 Internal Bays
             var allWeaponManagers = Resources.FindObjectsOfTypeAll<WeaponManager>();
+
             foreach (var wm in allWeaponManagers)
             {
                 if (wm == null || wm.transform == null || wm.transform.root == null) continue;
@@ -1454,6 +1821,7 @@ namespace BalanceAndVarietyRework
                     if (wm.hardpointSets != null && wm.hardpointSets.Length > 1)
                     {
                         var internalBays = wm.hardpointSets[1];
+
                         if (internalBays != null && internalBays.weaponOptions != null && !internalBays.weaponOptions.Contains(doubleMount))
                         {
                             internalBays.weaponOptions.Add(doubleMount);
@@ -1487,6 +1855,7 @@ namespace BalanceAndVarietyRework
             bool patchedAny = false;
 
             var allWeaponManagers = Resources.FindObjectsOfTypeAll<WeaponManager>();
+
             foreach (var wm in allWeaponManagers)
             {
                 if (wm == null || wm.transform == null || wm.transform.root == null) continue;
@@ -1494,6 +1863,7 @@ namespace BalanceAndVarietyRework
                 if (wm.transform.root.name.Contains("AttackHelo1"))
                 {
                     bool success = TryFixBayPylon(wm.transform.root.gameObject);
+
                     if (success)
                     {
                         Debug.Log($"[ChicaneBayPylonSymmetryFix] Successfully centered bay pylon on: {wm.gameObject.name}");
@@ -1549,6 +1919,7 @@ namespace BalanceAndVarietyRework
 
             // Add to Fighter1 hardpoint set 2
             var allWeaponManagers = Resources.FindObjectsOfTypeAll<WeaponManager>();
+
             foreach (var wm in allWeaponManagers)
             {
                 if (wm == null || wm.transform == null || wm.transform.root == null) continue;
@@ -1597,6 +1968,7 @@ namespace BalanceAndVarietyRework
 
             // Add to Fighter1 hardpoint set 2
             var allWeaponManagers = Resources.FindObjectsOfTypeAll<WeaponManager>();
+
             foreach (var wm in allWeaponManagers)
             {
                 if (wm == null || wm.transform == null || wm.transform.root == null) continue;
@@ -1650,6 +2022,7 @@ namespace BalanceAndVarietyRework
 
             // Add to smallFighter1 hardpoint set 3
             var allWeaponManagers = Resources.FindObjectsOfTypeAll<WeaponManager>();
+
             foreach (var wm in allWeaponManagers)
             {
                 if (wm == null || wm.transform == null || wm.transform.root == null) continue;
@@ -1698,6 +2071,7 @@ namespace BalanceAndVarietyRework
 
             // Add to SmallFighter1 hardpoint set 3
             var allWeaponManagers = Resources.FindObjectsOfTypeAll<WeaponManager>();
+
             foreach (var wm in allWeaponManagers)
             {
                 if (wm == null || wm.transform == null || wm.transform.root == null) continue;
@@ -1751,6 +2125,7 @@ namespace BalanceAndVarietyRework
 
             // Add to QuadVTOL1 hardpoint sets 4 and 5
             var allWeaponManagers = Resources.FindObjectsOfTypeAll<WeaponManager>();
+
             foreach (var wm in allWeaponManagers)
             {
                 if (wm == null || wm.transform == null || wm.transform.root == null) continue;
@@ -1806,6 +2181,7 @@ namespace BalanceAndVarietyRework
 
             // Add to QuadVTOL1 hardpoint sets 4 and 5
             var allWeaponManagers = Resources.FindObjectsOfTypeAll<WeaponManager>();
+
             foreach (var wm in allWeaponManagers)
             {
                 if (wm == null || wm.transform == null || wm.transform.root == null) continue;
@@ -1866,6 +2242,7 @@ namespace BalanceAndVarietyRework
 
             // Add to Multirole1 hardpoint sets 4 and 5
             var allWeaponManagers = Resources.FindObjectsOfTypeAll<WeaponManager>();
+
             foreach (var wm in allWeaponManagers)
             {
                 if (wm == null || wm.transform == null || wm.transform.root == null) continue;
@@ -1921,6 +2298,7 @@ namespace BalanceAndVarietyRework
 
             // Add to Multirole1 hardpoint sets 4 and 5
             var allWeaponManagers = Resources.FindObjectsOfTypeAll<WeaponManager>();
+
             foreach (var wm in allWeaponManagers)
             {
                 if (wm == null || wm.transform == null || wm.transform.root == null) continue;
@@ -1986,6 +2364,7 @@ namespace BalanceAndVarietyRework
                 if (t.name.Contains("Laser_EW1"))
                 {
                     bool success = TryPatchMedusaLaser(t.gameObject);
+
                     if (success)
                     {
                         Debug.Log($"[MedusaLaserBuff] Successfully modified laser power draw on: {t.gameObject.name}");
@@ -2016,8 +2395,8 @@ namespace BalanceAndVarietyRework
                     if (comp.gameObject.GetComponent<ModifiedStatsFlag>() != null) continue;
 
                     var compTraverse = Traverse.Create(comp);
-                    var powerField = compTraverse.Field("power");
 
+                    var powerField = compTraverse.Field("power");
                     if (powerField.FieldExists())
                     {
                         powerField.SetValue(Plugin.MedusaLaserPowerDraw.Value);
@@ -2049,6 +2428,7 @@ namespace BalanceAndVarietyRework
 
             // Add to EW1 hardpoint set 3
             var allWeaponManagers = Resources.FindObjectsOfTypeAll<WeaponManager>();
+
             foreach (var wm in allWeaponManagers)
             {
                 if (wm == null || wm.transform == null || wm.transform.root == null) continue;
@@ -2097,6 +2477,7 @@ namespace BalanceAndVarietyRework
 
             // Add to EW1 hardpoint set 3
             var allWeaponManagers = Resources.FindObjectsOfTypeAll<WeaponManager>();
+
             foreach (var wm in allWeaponManagers)
             {
                 if (wm == null || wm.transform == null || wm.transform.root == null) continue;

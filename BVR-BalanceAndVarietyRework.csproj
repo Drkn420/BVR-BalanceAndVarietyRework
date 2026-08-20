@@ -14,27 +14,37 @@
 
   <!-- BepInEx and Game DLL References -->
   <ItemGroup>
-    <Reference Include="Assembly-CSharp">
-      <HintPath>$(GamePath)\NuclearOption_Data\Managed\Assembly-CSharp.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="UnityEngine">
-      <HintPath>$(GamePath)\NuclearOption_Data\Managed\UnityEngine.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="UnityEngine.CoreModule">
-      <HintPath>$(GamePath)\NuclearOption_Data\Managed\UnityEngine.CoreModule.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="BepInEx">
-      <HintPath>$(GamePath)\BepInEx\core\BepInEx.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="0Harmony">
-      <HintPath>$(GamePath)\BepInEx\core\0Harmony.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-  </ItemGroup>
+  <Reference Include="Assembly-CSharp">
+    <HintPath>$(GamePath)\NuclearOption_Data\Managed\Assembly-CSharp.dll</HintPath>
+    <Private>False</Private>
+  </Reference>
+
+  <Reference Include="UnityEngine">
+    <HintPath>$(GamePath)\NuclearOption_Data\Managed\UnityEngine.dll</HintPath>
+    <Private>False</Private>
+  </Reference>
+
+  <Reference Include="UnityEngine.CoreModule">
+    <HintPath>$(GamePath)\NuclearOption_Data\Managed\UnityEngine.CoreModule.dll</HintPath>
+    <Private>False</Private>
+  </Reference>
+
+
+  <Reference Include="Mirage">
+    <HintPath>$(GamePath)\NuclearOption_Data\Managed\Mirage.dll</HintPath>
+    <Private>False</Private>
+  </Reference>
+
+  <Reference Include="BepInEx">
+    <HintPath>$(GamePath)\BepInEx\core\BepInEx.dll</HintPath>
+    <Private>False</Private>
+  </Reference>
+
+  <Reference Include="0Harmony">
+    <HintPath>$(GamePath)\BepInEx\core\0Harmony.dll</HintPath>
+    <Private>False</Private>
+  </Reference>
+</ItemGroup>
 
   <!-- Auto-Copy Compiled DLL to the BepInEx plugins folder -->
   <Target Name="PostBuild" AfterTargets="PostBuildEvent">
