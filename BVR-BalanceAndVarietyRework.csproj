@@ -29,6 +29,10 @@
     <Private>False</Private>
   </Reference>
 
+  <Reference Include="UnityEngine.PhysicsModule">
+    <HintPath>$(GamePath)\NuclearOption_Data\Managed\UnityEngine.PhysicsModule.dll</HintPath>
+    <Private>False</Private>
+  </Reference>
 
   <Reference Include="Mirage">
     <HintPath>$(GamePath)\NuclearOption_Data\Managed\Mirage.dll</HintPath>

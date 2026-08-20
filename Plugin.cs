@@ -90,6 +90,7 @@ namespace BalanceAndVarietyRework
         public static ConfigEntry<float> MedusaLaserPowerDraw;
         public static ConfigEntry<bool> EnableMedusaLynchpinx14Double;
         public static ConfigEntry<bool> EnableMedusaKingpinx8Double;
+        public static ConfigEntry<bool> EnableMedusaSAMRadar2Single;
 
         private void Awake()
         {
@@ -184,6 +185,7 @@ namespace BalanceAndVarietyRework
             MedusaLaserPowerDraw = Config.Bind("EW-25 Medusa Changes", "Medusa Laser Power Draw Value", 60.0f, "Sets the power draw of the Medusa's laser. (Vanilla is 120).");
             EnableMedusaLynchpinx14Double = Config.Bind("EW-25 Medusa Changes", "Enable Medusa Lynchpin x14 Double", true, "Enables the AGR-18 Lynchpin x14 double rocket pod on the Medusa's hardpoint set 3.");
             EnableMedusaKingpinx8Double = Config.Bind("EW-25 Medusa Changes", "Enable Medusa Kingpin x8 Double", true, "Enables the AGR-24 Kingpin x8 double rocket pod on the Medusa's hardpoint set 3.");
+            EnableMedusaSAMRadar2Single = Config.Bind("EW-25 Medusa Changes", "Enable Medusa R9 Stratolance x1", true, "Enables the R9 Stratolance x1 mount on the Medusa's hardpoint sets 3 and 4.");
 
             // 3. Generate Config Hash and format the new version string
             string configHash = GenerateConfigHash();
@@ -243,6 +245,7 @@ namespace BalanceAndVarietyRework
             Harmony.CreateAndPatchAll(typeof(MedusaLaserPatch));
             Harmony.CreateAndPatchAll(typeof(MedusaLynchpinx14DoublePatch));
             Harmony.CreateAndPatchAll(typeof(MedusaKingpinx8DoublePatch));
+            Harmony.CreateAndPatchAll(typeof(MedusaSAMRadar2SinglePatch));
 
             Logger.LogInfo("BVR - Balance and Variety Rework Mod Loaded!");
         }
@@ -261,7 +264,7 @@ namespace BalanceAndVarietyRework
                 $"{EnableVortexLynchpinx14Double.Value}_{EnableVortexKingpinx8Double.Value}_" +
                 $"{EnableTarantulaLynchpinx14Double.Value}_{EnableTarantulaKingpinx8Double.Value}_" +
                 $"{EnableIfritLynchpinx14Double.Value}_{EnableIfritKingpinx8Double.Value}_" +
-                $"{EnableMedusaLaserBuff.Value}_{MedusaLaserPowerDraw.Value}_{EnableMedusaLynchpinx14Double.Value}_{EnableMedusaKingpinx8Double.Value}";
+                $"{EnableMedusaLaserBuff.Value}_{MedusaLaserPowerDraw.Value}_{EnableMedusaLynchpinx14Double.Value}_{EnableMedusaKingpinx8Double.Value}_{EnableMedusaSAMRadar2Single.Value}";
 
             using (var md5 = MD5.Create())
             {
@@ -797,6 +800,7 @@ namespace BalanceAndVarietyRework
     // ====================================================================================================
     internal static class CustomWeaponsReusedAssets
     {
+        private static WeaponMount externalSAMRadar2SingleMount;
         private static WeaponMount externalLynchpinx14DoubleMount;
         private static WeaponMount externalKingpinx8DoubleMount;
         private static WeaponMount internalLynchpinx14DoubleMount;
@@ -804,6 +808,144 @@ namespace BalanceAndVarietyRework
 
         private const float InternalLynchpinRailDelay = 0.5f;
         private const float InternalKingpinRailDelay = 0.5f;
+
+
+
+        // ====================================================================================================
+        // EXTERNAL SAM_RADAR2 SINGLE (R9 STRATOLANCE x1)
+        // ====================================================================================================
+        public static WeaponMount GetExternalSAMRadar2Single()
+        {
+            if (externalSAMRadar2SingleMount != null) return externalSAMRadar2SingleMount;
+            
+            var allMounts = Resources.FindObjectsOfTypeAll<WeaponMount>();
+            WeaponMount singleMount = allMounts.FirstOrDefault(w => w != null && w.jsonKey == "AAM4_single");
+            if (singleMount == null)
+            {
+                singleMount = allMounts.FirstOrDefault(w => w != null && w.name == "AAM4_single");
+            }
+            if (singleMount == null || singleMount.prefab == null) return null;
+
+            // 1. Duplicate the GameObject as a child of the shared disabled vault
+            GameObject singlePrefab = UnityEngine.Object.Instantiate(singleMount.prefab, PrefabVault.Get().transform);
+            singlePrefab.name = "SAM_Radar2_single";
+            
+            // Satisfies activeSelf = true, but activeInHierarchy = false
+            singlePrefab.SetActive(true);
+
+            // --- VISUAL AND PHYSICAL ASSET SWAPPING ---
+            // Find the original SAM_Radar2 prefab in the game's loaded resources to steal its visuals and hitbox
+            var allGameObjects = Resources.FindObjectsOfTypeAll<GameObject>();
+            GameObject originalSamPrefab = allGameObjects.FirstOrDefault(go => go != null && go.name == "SAM_Radar2" && go.transform.parent == null);
+
+            if (originalSamPrefab != null)
+            {
+                Transform pylon = singlePrefab.transform.Find("pylon");
+                if (pylon != null)
+                {
+                    Transform missileChild = pylon.Find("aam4");
+                    if (missileChild != null)
+                    {
+                        // 1. Rename the child to match the new weapon
+                        missileChild.name = "sam_radar2";
+
+                        // 2. Swap MeshFilter (The 3D Geometry)
+                        MeshFilter origMf = originalSamPrefab.GetComponent<MeshFilter>();
+                        MeshFilter newMf = missileChild.GetComponent<MeshFilter>();
+                        if (origMf != null && newMf != null) 
+                        {
+                            newMf.sharedMesh = origMf.sharedMesh;
+                        }
+
+                        // 3. Swap MeshRenderer (The Textures/Materials)
+                        MeshRenderer origMr = originalSamPrefab.GetComponent<MeshRenderer>();
+                        MeshRenderer newMr = missileChild.GetComponent<MeshRenderer>();
+                        if (origMr != null && newMr != null) 
+                        {
+                            newMr.sharedMaterials = origMr.sharedMaterials;
+                        }
+
+                        // 4. Neutralize LODGroup (Level of Detail)
+                        // The AAM4 uses LODs. If we leave it enabled, it will try to render the old AAM4 meshes 
+                        // at certain distances because its internal renderer references haven't been updated.
+                        // Disabling it forces the game to always draw the high-poly MeshFilter we just swapped.
+                        LODGroup newLod = missileChild.GetComponent<LODGroup>();
+                        if (newLod != null) 
+                        {
+                            newLod.enabled = false;
+                        }
+
+                        // 5. Swap CapsuleCollider (The Physical Hitbox)
+                        // The R9 is a different size than the AAM4. We copy the vanilla R9's collider 
+                        // dimensions so the missile has the correct hitbox for damage and collisions.
+                        CapsuleCollider origCol = originalSamPrefab.GetComponent<CapsuleCollider>();
+                        CapsuleCollider newCol = missileChild.GetComponent<CapsuleCollider>();
+                        if (origCol != null && newCol != null)
+                        {
+                            newCol.center = origCol.center;
+                            newCol.radius = origCol.radius;
+                            newCol.height = origCol.height;
+                            newCol.direction = origCol.direction;
+                        }
+                    }
+                }
+            }
+            else
+            {
+                Debug.LogWarning("[ExternalSAMRadar2Single] Could not find original 'SAM_Radar2' prefab in resources to copy mesh and collider!");
+            }
+            // --- END OF SWAPPING LOGIC ---
+
+            // Find the info asset for SAM_Radar2
+            var allAssets = Resources.FindObjectsOfTypeAll<UnityEngine.Object>();
+            var samInfoAsset = allAssets.FirstOrDefault(o => o != null && o.name == "info_SAM_Radar2");
+
+            // Sweep for the MountedMissile component and update its info to the R9 Stratolance
+            foreach (var comp in singlePrefab.GetComponentsInChildren<Component>(true))
+            {
+                if (comp == null) continue;
+                var type = comp.GetType();
+                if (type == null || type.Name != "MountedMissile") continue;
+
+                var traverseComp = Traverse.Create(comp);
+                if (samInfoAsset != null)
+                {
+                    var infoField = traverseComp.Field("info");
+                    if (infoField.FieldExists())
+                    {
+                        infoField.SetValue(samInfoAsset);
+                    }
+                    else
+                    {
+                        // Fallback if it's exposed as a property
+                        var infoProperty = traverseComp.Property("info");
+                        if (infoProperty.PropertyExists())
+                        {
+                            infoProperty.SetValue(samInfoAsset);
+                        }
+                    }
+                }
+            }
+
+            // 2. Duplicate the WeaponMount and configure it
+            WeaponMount newMount = UnityEngine.Object.Instantiate(singleMount);
+            newMount.name = "SAM_Radar2_single";
+            newMount.prefab = singlePrefab;
+
+            var traverseMount = Traverse.Create(newMount);
+            if (traverseMount.Field("mountName").FieldExists())
+                traverseMount.Field("mountName").SetValue("R9 Stratolance x1");
+            if (traverseMount.Field("jsonKey").FieldExists())
+                traverseMount.Field("jsonKey").SetValue("SAM_Radar2_single");
+
+            SetNetworkLookupIndex(traverseMount, "SAM_Radar2_single");
+
+            externalSAMRadar2SingleMount = newMount;
+            Debug.Log("[ExternalSAMRadar2Single] Custom R9 Stratolance x1 prefab and mount generation complete!");
+            return externalSAMRadar2SingleMount;
+        }
+
+
 
         // ====================================================================================================
         // EXTERNAL LYNCHPIN X14 DOUBLE
@@ -2507,6 +2649,59 @@ namespace BalanceAndVarietyRework
             Debug.Log("[MedusaKingpinx8Double] Master Prefab injection complete!");
         }
     }
+
+
+
+    // ====================================================================================================
+    // MEDUSA SAM_RADAR2 SINGLE (R9 STRATOLANCE x1)
+    // ====================================================================================================
+    [HarmonyPatch(typeof(WeaponManager), "Awake")]
+    public static class MedusaSAMRadar2SinglePatch
+    {
+        private static bool hasPatchedMedusaSAMRadar2Single = false;
+        public static void Prefix()
+        {
+            if (!Plugin.EnableMedusaSAMRadar2Single.Value) return;
+            if (hasPatchedMedusaSAMRadar2Single) return;
+            
+            WeaponMount singleMount = CustomWeaponsReusedAssets.GetExternalSAMRadar2Single();
+            if (singleMount == null) return;
+            
+            // Add to EW1 hardpoint sets 3 and 4
+            var allWeaponManagers = Resources.FindObjectsOfTypeAll<WeaponManager>();
+            foreach (var wm in allWeaponManagers)
+            {
+                if (wm == null || wm.transform == null || wm.transform.root == null) continue;
+                if (wm.transform.root.name.Contains("EW1"))
+                {
+                    if (wm.hardpointSets != null && wm.hardpointSets.Length > 4)
+                    {
+                        bool updated = false;
+                        var hardpointSet3 = wm.hardpointSets[3];
+                        if (hardpointSet3 != null && hardpointSet3.weaponOptions != null && !hardpointSet3.weaponOptions.Contains(singleMount))
+                        {
+                            hardpointSet3.weaponOptions.Add(singleMount);
+                            updated = true;
+                        }
+                        var hardpointSet4 = wm.hardpointSets[4];
+                        if (hardpointSet4 != null && hardpointSet4.weaponOptions != null && !hardpointSet4.weaponOptions.Contains(singleMount))
+                        {
+                            hardpointSet4.weaponOptions.Add(singleMount);
+                            updated = true;
+                        }
+                        if (updated)
+                        {
+                            Debug.Log($"[MedusaSAMRadar2Single] Successfully injected R9 Stratolance x1 into {wm.gameObject.name} hardpoint sets 3 and 4.");
+                        }
+                    }
+                }
+            }
+            hasPatchedMedusaSAMRadar2Single = true;
+            Debug.Log("[MedusaSAMRadar2Single] Master Prefab injection complete!");
+        }
+    }
+
+
 
     // ====================================================================================================
     // SFB-81 DARKREACH CHANGES (Darkreach)
