@@ -91,6 +91,7 @@ namespace BalanceAndVarietyRework
         public static ConfigEntry<bool> EnableMedusaLynchpinx14Double;
         public static ConfigEntry<bool> EnableMedusaKingpinx8Double;
         public static ConfigEntry<bool> EnableMedusaSAMRadar2Single;
+        public static ConfigEntry<bool> EnableMedusaSAMRadar2Double;
 
         private void Awake()
         {
@@ -186,6 +187,7 @@ namespace BalanceAndVarietyRework
             EnableMedusaLynchpinx14Double = Config.Bind("EW-25 Medusa Changes", "Enable Medusa Lynchpin x14 Double", true, "Enables the AGR-18 Lynchpin x14 double rocket pod on the Medusa's hardpoint set 3.");
             EnableMedusaKingpinx8Double = Config.Bind("EW-25 Medusa Changes", "Enable Medusa Kingpin x8 Double", true, "Enables the AGR-24 Kingpin x8 double rocket pod on the Medusa's hardpoint set 3.");
             EnableMedusaSAMRadar2Single = Config.Bind("EW-25 Medusa Changes", "Enable Medusa R9 Stratolance x1", true, "Enables the R9 Stratolance x1 mount on the Medusa's hardpoint sets 3 and 4.");
+            EnableMedusaSAMRadar2Double = Config.Bind("EW-25 Medusa Changes", "Enable Medusa R9 Stratolance x2", true, "Enables the R9 Stratolance x2 mount on the Medusa's hardpoint set 4.");
 
             // 3. Generate Config Hash and format the new version string
             string configHash = GenerateConfigHash();
@@ -246,6 +248,7 @@ namespace BalanceAndVarietyRework
             Harmony.CreateAndPatchAll(typeof(MedusaLynchpinx14DoublePatch));
             Harmony.CreateAndPatchAll(typeof(MedusaKingpinx8DoublePatch));
             Harmony.CreateAndPatchAll(typeof(MedusaSAMRadar2SinglePatch));
+            Harmony.CreateAndPatchAll(typeof(MedusaSAMRadar2DoublePatch));
 
             Logger.LogInfo("BVR - Balance and Variety Rework Mod Loaded!");
         }
@@ -264,7 +267,7 @@ namespace BalanceAndVarietyRework
                 $"{EnableVortexLynchpinx14Double.Value}_{EnableVortexKingpinx8Double.Value}_" +
                 $"{EnableTarantulaLynchpinx14Double.Value}_{EnableTarantulaKingpinx8Double.Value}_" +
                 $"{EnableIfritLynchpinx14Double.Value}_{EnableIfritKingpinx8Double.Value}_" +
-                $"{EnableMedusaLaserBuff.Value}_{MedusaLaserPowerDraw.Value}_{EnableMedusaLynchpinx14Double.Value}_{EnableMedusaKingpinx8Double.Value}_{EnableMedusaSAMRadar2Single.Value}";
+                $"{EnableMedusaLaserBuff.Value}_{MedusaLaserPowerDraw.Value}_{EnableMedusaLynchpinx14Double.Value}_{EnableMedusaKingpinx8Double.Value}_{EnableMedusaSAMRadar2Single.Value}_{EnableMedusaSAMRadar2Double.Value}";
 
             using (var md5 = MD5.Create())
             {
@@ -801,6 +804,7 @@ namespace BalanceAndVarietyRework
     internal static class CustomWeaponsReusedAssets
     {
         private static WeaponMount externalSAMRadar2SingleMount;
+        private static WeaponMount externalSAMRadar2DoubleMount;
         private static WeaponMount externalLynchpinx14DoubleMount;
         private static WeaponMount externalKingpinx8DoubleMount;
         private static WeaponMount internalLynchpinx14DoubleMount;
@@ -808,6 +812,213 @@ namespace BalanceAndVarietyRework
 
         private const float InternalLynchpinRailDelay = 0.5f;
         private const float InternalKingpinRailDelay = 0.5f;
+
+
+
+        // ====================================================================================================
+        // CLONED POD LIVERY FIX / COLORABLE MOUNT MERGE
+        // ====================================================================================================
+
+        private static void MirrorColorableMountToClonedPod(GameObject prefabRoot, GameObject sourcePod, GameObject clonedPod)
+        {
+            if (prefabRoot == null || sourcePod == null || clonedPod == null)
+                return;
+
+            ColorableMount rootMount = EnsureRootColorableMount(prefabRoot);
+            if (rootMount == null)
+            {
+                Debug.LogWarning($"[CustomWeaponsReusedAssets] No ColorableMount found on {prefabRoot.name}. Cloned pod livery fix skipped.");
+                return;
+            }
+
+            var rootTraverse = Traverse.Create(rootMount);
+            var colorField = rootTraverse.Field("colorableRenderers");
+            var skinField = rootTraverse.Field("skinnableRenderers");
+
+            if (!colorField.FieldExists() || !skinField.FieldExists())
+            {
+                Debug.LogWarning($"[CustomWeaponsReusedAssets] Could not access ColorableMount renderer arrays on {prefabRoot.name}.");
+                return;
+            }
+
+            var colorList = new List<Renderer>(colorField.GetValue<Renderer[]>() ?? new Renderer[0]);
+            var skinList = new List<Renderer>(skinField.GetValue<Renderer[]>() ?? new Renderer[0]);
+
+            AddMirroredRenderers(colorList, sourcePod.transform, clonedPod.transform);
+            AddMirroredRenderers(skinList, sourcePod.transform, clonedPod.transform);
+
+            colorField.SetValue(colorList.Where(r => r != null).ToArray());
+            skinField.SetValue(skinList.Where(r => r != null).ToArray());
+
+            Debug.Log($"[CustomWeaponsReusedAssets] Updated ColorableMount on {prefabRoot.name}. Colorable renderers: {colorList.Count}, Skinnable renderers: {skinList.Count}.");
+        }
+
+        private static ColorableMount EnsureRootColorableMount(GameObject prefabRoot)
+        {
+            if (prefabRoot == null)
+                return null;
+
+            ColorableMount[] existingMounts = prefabRoot.GetComponentsInChildren<ColorableMount>(true);
+            if (existingMounts == null || existingMounts.Length == 0)
+                return null;
+
+            ColorableMount rootMount = prefabRoot.GetComponent<ColorableMount>();
+            if (rootMount == null)
+                rootMount = prefabRoot.AddComponent<ColorableMount>();
+
+            var rootTraverse = Traverse.Create(rootMount);
+            var rootColorField = rootTraverse.Field("colorableRenderers");
+            var rootSkinField = rootTraverse.Field("skinnableRenderers");
+
+            if (!rootColorField.FieldExists() || !rootSkinField.FieldExists())
+                return rootMount;
+
+            var colorList = new List<Renderer>(rootColorField.GetValue<Renderer[]>() ?? new Renderer[0]);
+            var skinList = new List<Renderer>(rootSkinField.GetValue<Renderer[]>() ?? new Renderer[0]);
+
+            foreach (ColorableMount mount in existingMounts)
+            {
+                if (mount == null || mount == rootMount)
+                    continue;
+
+                var mountTraverse = Traverse.Create(mount);
+
+                var childColorField = mountTraverse.Field("colorableRenderers");
+                if (childColorField.FieldExists())
+                {
+                    Renderer[] childColors = childColorField.GetValue<Renderer[]>() ?? new Renderer[0];
+                    foreach (Renderer r in childColors)
+                        AddUniqueRenderer(colorList, r);
+                }
+
+                var childSkinField = mountTraverse.Field("skinnableRenderers");
+                if (childSkinField.FieldExists())
+                {
+                    Renderer[] childSkins = childSkinField.GetValue<Renderer[]>() ?? new Renderer[0];
+                    foreach (Renderer r in childSkins)
+                        AddUniqueRenderer(skinList, r);
+                }
+
+                // Consolidate to one root ColorableMount.
+                // ColorableMount is one-shot anyway: it registers renderers and destroys itself.
+                UnityEngine.Object.DestroyImmediate(mount);
+            }
+
+            rootColorField.SetValue(colorList.Where(r => r != null).ToArray());
+            rootSkinField.SetValue(skinList.Where(r => r != null).ToArray());
+
+            return rootMount;
+        }
+
+        private static void AddMirroredRenderers(List<Renderer> renderers, Transform sourceRoot, Transform clonedRoot)
+        {
+            if (renderers == null || sourceRoot == null || clonedRoot == null)
+                return;
+
+            Renderer[] originals = renderers.Where(r => r != null).ToArray();
+
+            foreach (Renderer original in originals)
+            {
+                if (!IsUnderTransform(original.transform, sourceRoot))
+                    continue;
+
+                Renderer mirrored = FindMirroredRenderer(original, sourceRoot, clonedRoot);
+                AddUniqueRenderer(renderers, mirrored);
+            }
+        }
+
+        private static Renderer FindMirroredRenderer(Renderer original, Transform sourceRoot, Transform clonedRoot)
+        {
+            if (original == null || sourceRoot == null || clonedRoot == null)
+                return null;
+
+            Transform targetTransform = FindMirroredTransform(original.transform, sourceRoot, clonedRoot);
+            if (targetTransform == null)
+                return null;
+
+            Renderer[] originalRenderers = original.GetComponents<Renderer>();
+
+            int rendererIndex = -1;
+            for (int i = 0; i < originalRenderers.Length; i++)
+            {
+                if (originalRenderers[i] == original)
+                {
+                    rendererIndex = i;
+                    break;
+                }
+            }
+
+            Renderer[] clonedRenderers = targetTransform.GetComponents<Renderer>();
+            if (clonedRenderers.Length == 0)
+                return null;
+
+            if (rendererIndex >= 0 && rendererIndex < clonedRenderers.Length)
+                return clonedRenderers[rendererIndex];
+
+            return clonedRenderers[0];
+        }
+
+        private static Transform FindMirroredTransform(Transform original, Transform sourceRoot, Transform clonedRoot)
+        {
+            if (original == null || sourceRoot == null || clonedRoot == null)
+                return null;
+
+            if (!IsUnderTransform(original, sourceRoot))
+                return null;
+
+            if (original == sourceRoot)
+                return clonedRoot;
+
+            List<int> siblingPath = new List<int>();
+            Transform current = original;
+
+            while (current != null && current != sourceRoot)
+            {
+                siblingPath.Insert(0, current.GetSiblingIndex());
+                current = current.parent;
+            }
+
+            Transform target = clonedRoot;
+
+            foreach (int siblingIndex in siblingPath)
+            {
+                if (target == null || siblingIndex < 0 || siblingIndex >= target.childCount)
+                    return null;
+
+                target = target.GetChild(siblingIndex);
+            }
+
+            return target;
+        }
+
+        private static bool IsUnderTransform(Transform child, Transform root)
+        {
+            if (child == null || root == null)
+                return false;
+
+            while (child != null)
+            {
+                if (child == root)
+                    return true;
+
+                child = child.parent;
+            }
+
+            return false;
+        }
+
+        private static void AddUniqueRenderer(List<Renderer> list, Renderer renderer)
+        {
+            if (renderer == null)
+                return;
+
+            int id = renderer.GetInstanceID();
+
+            if (list.Any(existing => existing != null && existing.GetInstanceID() == id))
+                return;
+
+            list.Add(renderer);
+        }
 
 
 
@@ -948,6 +1159,170 @@ namespace BalanceAndVarietyRework
 
 
         // ====================================================================================================
+        // EXTERNAL SAM_RADAR2 DOUBLE (R9 STRATOLANCE x2)
+        // ====================================================================================================
+        public static WeaponMount GetExternalSAMRadar2Double()
+        {
+            if (externalSAMRadar2DoubleMount != null) return externalSAMRadar2DoubleMount;
+
+            var allMounts = Resources.FindObjectsOfTypeAll<WeaponMount>();
+            WeaponMount armDoubleMount = allMounts.FirstOrDefault(w => w != null && w.jsonKey == "ARM1_double");
+            if (armDoubleMount == null)
+            {
+                armDoubleMount = allMounts.FirstOrDefault(w => w != null && w.name == "ARM1_double");
+            }
+
+            if (armDoubleMount == null || armDoubleMount.prefab == null) return null;
+
+            // 1. Duplicate the GameObject as a child of the shared disabled vault
+            GameObject doublePrefab = UnityEngine.Object.Instantiate(armDoubleMount.prefab, PrefabVault.Get().transform);
+            doublePrefab.name = "SAM_Radar2_double";
+
+            // Satisfies activeSelf = true, but activeInHierarchy = false
+            doublePrefab.SetActive(true);
+
+            // --- VISUAL AND PHYSICAL ASSET SWAPPING ---
+            // Find the original SAM_Radar2 prefab in the game's loaded resources to steal its visuals and hitbox
+            var allGameObjects = Resources.FindObjectsOfTypeAll<GameObject>();
+            GameObject originalSamPrefab = allGameObjects.FirstOrDefault(go => go != null && go.name == "SAM_Radar2" && go.transform.parent == null);
+
+            if (originalSamPrefab != null)
+            {
+                int swappedMissiles = 0;
+
+                var allChildren = doublePrefab.GetComponentsInChildren<Transform>(true);
+                foreach (var child in allChildren)
+                {
+                    if (child == null || child == doublePrefab.transform) continue;
+
+                    // Only process the two direct pylons. This intentionally ignores "pylon (1)".
+                    if (child.parent != doublePrefab.transform) continue;
+                    if (child.name != "pylon") continue;
+
+                    Transform missileChild = child.Find("ARM1");
+                    if (missileChild == null) continue;
+
+                    // Rename the child to match the new weapon
+                    missileChild.name = "sam_radar2";
+
+                    SwapMissileToSamRadar2(missileChild, originalSamPrefab);
+                    swappedMissiles++;
+                }
+
+                if (swappedMissiles < 2)
+                {
+                    Debug.LogWarning($"[ExternalSAMRadar2Double] Expected 2 ARM1 missiles under ARM1_double pylons, but swapped {swappedMissiles}.");
+                }
+            }
+            else
+            {
+                Debug.LogWarning("[ExternalSAMRadar2Double] Could not find original 'SAM_Radar2' prefab in resources to copy mesh and collider!");
+            }
+            // --- END OF SWAPPING LOGIC ---
+
+            // Find the info asset for SAM_Radar2
+            var allAssets = Resources.FindObjectsOfTypeAll<UnityEngine.Object>();
+            var samInfoAsset = allAssets.FirstOrDefault(o => o != null && o.name == "info_SAM_Radar2");
+
+            // Sweep for the MountedMissile components and update their info to the R9 Stratolance
+            foreach (var comp in doublePrefab.GetComponentsInChildren<Component>(true))
+            {
+                if (comp == null) continue;
+
+                var type = comp.GetType();
+                if (type == null || type.Name != "MountedMissile") continue;
+
+                var traverseComp = Traverse.Create(comp);
+                if (samInfoAsset != null)
+                {
+                    var infoField = traverseComp.Field("info");
+                    if (infoField.FieldExists())
+                    {
+                        infoField.SetValue(samInfoAsset);
+                    }
+                    else
+                    {
+                        // Fallback if it's exposed as a property
+                        var infoProperty = traverseComp.Property("info");
+                        if (infoProperty.PropertyExists())
+                        {
+                            infoProperty.SetValue(samInfoAsset);
+                        }
+                    }
+                }
+            }
+
+            // 2. Duplicate the WeaponMount and configure it
+            WeaponMount newMount = UnityEngine.Object.Instantiate(armDoubleMount);
+            newMount.name = "SAM_Radar2_double";
+            newMount.prefab = doublePrefab;
+
+            var traverseMount = Traverse.Create(newMount);
+            if (traverseMount.Field("mountName").FieldExists())
+                traverseMount.Field("mountName").SetValue("R9 Stratolance x2");
+            if (traverseMount.Field("jsonKey").FieldExists())
+                traverseMount.Field("jsonKey").SetValue("SAM_Radar2_double");
+
+            SetNetworkLookupIndex(traverseMount, "SAM_Radar2_double");
+
+            externalSAMRadar2DoubleMount = newMount;
+            Debug.Log("[ExternalSAMRadar2Double] Custom R9 Stratolance x2 prefab and mount generation complete!");
+            return externalSAMRadar2DoubleMount;
+        }
+
+        private static void SwapMissileToSamRadar2(Transform missileChild, GameObject originalSamPrefab)
+        {
+            if (missileChild == null || originalSamPrefab == null) return;
+
+            // Swap MeshFilter (The 3D Geometry)
+            MeshFilter origMf = originalSamPrefab.GetComponent<MeshFilter>();
+            MeshFilter newMf = missileChild.GetComponent<MeshFilter>();
+            if (origMf != null && newMf != null)
+            {
+                newMf.sharedMesh = origMf.sharedMesh;
+            }
+
+            // Swap MeshRenderer (The Textures/Materials)
+            MeshRenderer origMr = originalSamPrefab.GetComponent<MeshRenderer>();
+            MeshRenderer newMr = missileChild.GetComponent<MeshRenderer>();
+            if (origMr != null && newMr != null)
+            {
+                newMr.sharedMaterials = origMr.sharedMaterials;
+            }
+
+            // Neutralize LODGroup (Level of Detail)
+            // The ARM1 missiles may use LODs. If we leave it enabled, it can try to render the old ARM1 meshes
+            // at certain distances because its internal renderer references haven't been updated.
+            // Disabling it forces the game to always draw the high-poly MeshFilter we just swapped.
+            LODGroup newLod = missileChild.GetComponent<LODGroup>();
+            if (newLod != null)
+            {
+                newLod.enabled = false;
+            }
+
+            // Swap CapsuleCollider (The Physical Hitbox)
+            // The R9 is a different size than the ARM1. We copy the vanilla R9's collider
+            // dimensions so the missile has the correct hitbox for damage and collisions.
+            CapsuleCollider origCol = originalSamPrefab.GetComponent<CapsuleCollider>();
+            CapsuleCollider newCol = missileChild.GetComponent<CapsuleCollider>();
+            if (origCol != null)
+            {
+                if (newCol == null)
+                {
+                    newCol = missileChild.gameObject.AddComponent<CapsuleCollider>();
+                }
+
+                newCol.center = origCol.center;
+                newCol.radius = origCol.radius;
+                newCol.height = origCol.height;
+                newCol.direction = origCol.direction;
+                newCol.isTrigger = origCol.isTrigger;
+            }
+        }
+
+
+
+        // ====================================================================================================
         // EXTERNAL LYNCHPIN X14 DOUBLE
         // ====================================================================================================
         public static WeaponMount GetExternalLynchpinx14Double()
@@ -1046,6 +1421,8 @@ namespace BalanceAndVarietyRework
                 secondPod.name = "pod";
                 secondPod.localPosition = new Vector3(-0.14f, -0.15f, -0.005f);
                 secondPod.localEulerAngles = new Vector3(0f, 0f, -45f);
+                // Fix livery inheritance for the cloned pod.
+                MirrorColorableMountToClonedPod(doublePrefab, firstPod.gameObject, secondPod.gameObject);
             }
 
             // Reposition the pylon child to correct alignment
@@ -1188,6 +1565,8 @@ namespace BalanceAndVarietyRework
                 secondPod.name = "pod";
                 secondPod.localPosition = new Vector3(-0.14f, -0.15f, -0.005f);
                 secondPod.localEulerAngles = new Vector3(0f, 0f, -45f);
+                // Fix livery inheritance for the cloned pod.
+                MirrorColorableMountToClonedPod(doublePrefab, firstPod.gameObject, secondPod.gameObject);
             }
 
             // Reposition the pylon child to correct internal bay alignment
@@ -2698,6 +3077,56 @@ namespace BalanceAndVarietyRework
             }
             hasPatchedMedusaSAMRadar2Single = true;
             Debug.Log("[MedusaSAMRadar2Single] Master Prefab injection complete!");
+        }
+    }
+
+
+
+    // ====================================================================================================
+    // MEDUSA SAM_RADAR2 DOUBLE (R9 STRATOLANCE x2)
+    // ====================================================================================================
+    [HarmonyPatch(typeof(WeaponManager), "Awake")]
+    public static class MedusaSAMRadar2DoublePatch
+    {
+        private static bool hasPatchedMedusaSAMRadar2Double = false;
+
+        public static void Prefix()
+        {
+            if (!Plugin.EnableMedusaSAMRadar2Double.Value) return;
+            if (hasPatchedMedusaSAMRadar2Double) return;
+
+            WeaponMount doubleMount = CustomWeaponsReusedAssets.GetExternalSAMRadar2Double();
+            if (doubleMount == null) return;
+
+            // Add to EW1 hardpoint set 4
+            var allWeaponManagers = Resources.FindObjectsOfTypeAll<WeaponManager>();
+            foreach (var wm in allWeaponManagers)
+            {
+                if (wm == null || wm.transform == null || wm.transform.root == null) continue;
+
+                if (wm.transform.root.name.Contains("EW1"))
+                {
+                    if (wm.hardpointSets != null && wm.hardpointSets.Length > 4)
+                    {
+                        bool updated = false;
+
+                        var hardpointSet4 = wm.hardpointSets[4];
+                        if (hardpointSet4 != null && hardpointSet4.weaponOptions != null && !hardpointSet4.weaponOptions.Contains(doubleMount))
+                        {
+                            hardpointSet4.weaponOptions.Add(doubleMount);
+                            updated = true;
+                        }
+
+                        if (updated)
+                        {
+                            Debug.Log($"[MedusaSAMRadar2Double] Successfully injected R9 Stratolance x2 into {wm.gameObject.name} hardpoint set 4.");
+                        }
+                    }
+                }
+            }
+
+            hasPatchedMedusaSAMRadar2Double = true;
+            Debug.Log("[MedusaSAMRadar2Double] Master Prefab injection complete!");
         }
     }
 
