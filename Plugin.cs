@@ -8,20 +8,35 @@ using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using UnityEngine;
+using System.Globalization;
+using System.Reflection;
 
 namespace BalanceAndVarietyRework
 {
     [BepInPlugin("com.Draken0015.BVR", "Balance and Variety Rework", BaseVersion)]
     public class Plugin : BaseUnityPlugin
     {
-        public const string BaseVersion = "1.0.9";
+        public const string BaseVersion = "1.1.3";
 
         // Expose the dynamically generated version hash for multiplayer desync checks
         public static string FullVersionWithHash { get; private set; }
 
+
+
         // ==========================================================================
         // Configuration Entries
         // ==========================================================================
+
+        // Important notice / seed display entries
+        [SeedIgnore]
+        public static ConfigEntry<string> ModVersionDisplay;
+
+        [SeedIgnore]
+        public static ConfigEntry<string> CurrentConfigSeed;
+
+        [SeedIgnore]
+        public static ConfigEntry<string> ImportConfigSeed;
+
 
         // Missile Balance Entries
 
@@ -100,9 +115,22 @@ namespace BalanceAndVarietyRework
                 new ConfigDescription("Please restart the game after changing any settings for them to take effect.", null,
                 new ConfigurationManagerAttributes { ReadOnly = true, HideDefaultButton = true, Order = 100 }));
 
+            ModVersionDisplay = Config.Bind("Important Notices", "Mod Version", $"v{BaseVersion}",
+                new ConfigDescription("The currently installed version of Balance and Variety Rework.", null,
+                new ConfigurationManagerAttributes { ReadOnly = true, HideDefaultButton = true, Order = 99 }));
+            ModVersionDisplay.Value = $"v{BaseVersion}";
+
             var hashDisplay = Config.Bind("Important Notices", "Current Config Hash", "Calculating...",
                 new ConfigDescription("Compare this 6-character hash with other players to ensure your settings match for multiplayer. (Updates on game restart)", null,
-                new ConfigurationManagerAttributes { ReadOnly = true, HideDefaultButton = true, Order = 99 }));
+                new ConfigurationManagerAttributes { ReadOnly = true, HideDefaultButton = true, Order = 98 }));
+
+            CurrentConfigSeed = Config.Bind("Important Notices", "Current Config Seed", "Calculating...",
+                new ConfigDescription("Copy this seed to share your exact Balance and Variety Rework configuration with other players. Restart the game before copying this seed to make sure it accurately reflects your active settings.", null,
+                new ConfigurationManagerAttributes { ReadOnly = true, HideDefaultButton = true, Order = 97 }));
+
+            ImportConfigSeed = Config.Bind("Important Notices", "Import Config Seed", "",
+                new ConfigDescription("Paste a Balance and Variety Rework configuration seed here, then restart the game to import that configuration.", null,
+                new ConfigurationManagerAttributes { HideDefaultButton = true, Order = 96 }));
 
             // 2. Bind functional configs
 
@@ -189,12 +217,37 @@ namespace BalanceAndVarietyRework
             EnableMedusaSAMRadar2Single = Config.Bind("EW-25 Medusa Changes", "Enable Medusa R9 Stratolance x1", true, "Enables the R9 Stratolance x1 mount on the Medusa's hardpoint sets 3 and 4.");
             EnableMedusaSAMRadar2Double = Config.Bind("EW-25 Medusa Changes", "Enable Medusa R9 Stratolance x2", true, "Enables the R9 Stratolance x2 mount on the Medusa's hardpoint set 4.");
 
+
+
+            // 2.5 Import a pending configuration seed before the hash/version is generated and before Harmony patches run.
+            // This keeps the normal restart workflow: paste the seed in ConfigManager, restart, imported settings load.
+            if (!string.IsNullOrWhiteSpace(ImportConfigSeed.Value))
+            {
+                string pendingSeed = ImportConfigSeed.Value;
+
+                if (TryImportConfigSeed(pendingSeed))
+                {
+                    Logger.LogInfo("BVR - Configuration seed imported successfully during startup.");
+                }
+                else
+                {
+                    Logger.LogWarning("BVR - Configuration seed import failed during startup. The seed was invalid or from an incompatible mod version.");
+                }
+
+                // Consume the import seed so it does not try to apply again on every launch.
+                ImportConfigSeed.Value = string.Empty;
+}
+
+
             // 3. Generate Config Hash and format the new version string
             string configHash = GenerateConfigHash();
             FullVersionWithHash = $"{BaseVersion}-{configHash}";
 
-            // 4. Update the notice retroactively with the generated hash
+            // 4. Update the notice retroactively with the generated hash and seed
             hashDisplay.Value = configHash;
+            CurrentConfigSeed.Value = GenerateConfigSeed();
+            Config.Save();
+
             Logger.LogInfo($"Mod Version Loaded: {FullVersionWithHash}");
 
             // 5. Register all Harmony patches
@@ -253,21 +306,16 @@ namespace BalanceAndVarietyRework
             Logger.LogInfo("BVR - Balance and Variety Rework Mod Loaded!");
         }
 
-        // Generates a short, deterministic alphanumeric hash based on the current config values
+        // ==========================================================================
+        // Config Seed Export / Import
+        // ==========================================================================
+
+        private const string SeedFormatPrefix = "BVR1";
+        private const string SeedPayloadPrefix = "BVRSEED";
+
         private string GenerateConfigHash()
         {
-            string combinedConfigs =
-                $"{EnableIRMissilesBuff.Value}_{FlareCountMultiplier.Value}_{FlareRejectionMultiplier.Value}_{EnableR9LockPersistenceBuff.Value}_{R9LockPersistenceValue.Value}_{EnableRAM45LockPersistenceBuff.Value}_{RAM45LockPersistenceValue.Value}_{EnableR9SARHRelock.Value}_{R9SARHRelockDelay.Value}_{R9SARHRelockAttempts.Value}_{EnableRAM45SARHRelock.Value}_{RAM45SARHRelockDelay.Value}_{RAM45SARHRelockAttempts.Value}_" +
-                $"{EnableCricketLynchpinx14Double.Value}_{EnableCricketKingpinx8Double.Value}_" +
-                $"{EnableCompassLynchpinx14Double.Value}_{EnableCompassKingpinx8Double.Value}_" +
-                $"{EnableVagrantLynchpinx14Double.Value}_{EnableVagrantKingpinx8Double.Value}_" +
-                $"{EnableIbisLynchpinx14Double.Value}_{EnableIbisKingpinx8Double.Value}_" +
-                $"{EnableChicaneProxyGun.Value}_{EnableChicaneScythesSingle.Value}_{EnableChicaneScythesDouble.Value}_{EnableChicaneInternalLynchpinx14.Value}_{EnableChicaneInternalKingpinx8.Value}_{EnableChicaneBayPylonSymmetryFix.Value}_" +
-                $"{EnableRevokerLynchpinx14Double.Value}_{EnableRevokerKingpinx8Double.Value}_" +
-                $"{EnableVortexLynchpinx14Double.Value}_{EnableVortexKingpinx8Double.Value}_" +
-                $"{EnableTarantulaLynchpinx14Double.Value}_{EnableTarantulaKingpinx8Double.Value}_" +
-                $"{EnableIfritLynchpinx14Double.Value}_{EnableIfritKingpinx8Double.Value}_" +
-                $"{EnableMedusaLaserBuff.Value}_{MedusaLaserPowerDraw.Value}_{EnableMedusaLynchpinx14Double.Value}_{EnableMedusaKingpinx8Double.Value}_{EnableMedusaSAMRadar2Single.Value}_{EnableMedusaSAMRadar2Double.Value}";
+            string combinedConfigs = GenerateSeedPayload(false);
 
             using (var md5 = MD5.Create())
             {
@@ -275,7 +323,243 @@ namespace BalanceAndVarietyRework
                 return BitConverter.ToString(hashBytes).Replace("-", "").Substring(0, 6);
             }
         }
+
+        private string GenerateConfigSeed()
+        {
+            return $"{SeedFormatPrefix}-{ToUrlSafeBase64(GenerateSeedPayload(true))}";
+        }
+
+        private string GenerateSeedPayload(bool includeSeedMetadata)
+        {
+            StringBuilder payload = new StringBuilder();
+
+            if (includeSeedMetadata)
+                payload.Append(SeedPayloadPrefix).Append('|').Append(BaseVersion);
+            else
+                payload.Append("BVRHASH");
+
+            foreach (var field in GetSeedConfigEntryFields())
+            {
+                object entry = field.GetValue(null);
+                if (entry == null)
+                    continue;
+
+                PropertyInfo valueProperty = field.FieldType.GetProperty("Value");
+                if (valueProperty == null || !valueProperty.CanRead)
+                    continue;
+
+                object value = valueProperty.GetValue(entry);
+                Type valueType = field.FieldType.GetGenericArguments()[0];
+
+                payload.Append('|')
+                    .Append(field.Name)
+                    .Append(':')
+                    .Append(GetTypeKey(valueType))
+                    .Append(':')
+                    .Append(Uri.EscapeDataString(ConvertValueToString(value, valueType)));
+            }
+
+            return payload.ToString();
+        }
+
+        private bool TryImportConfigSeed(string seed)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(seed))
+                    return false;
+
+                seed = seed.Trim();
+
+                if (seed.StartsWith(SeedFormatPrefix + "-", StringComparison.OrdinalIgnoreCase))
+                    seed = seed.Substring(SeedFormatPrefix.Length + 1);
+
+                string payload = FromUrlSafeBase64(seed);
+                if (string.IsNullOrEmpty(payload))
+                    return false;
+
+                string[] parts = payload.Split('|');
+                if (parts.Length < 2 || parts[0] != SeedPayloadPrefix)
+                    return false;
+
+                if (parts[1] != BaseVersion)
+                {
+                    Logger.LogWarning($"BVR - Importing configuration seed from version {parts[1]}. Current version is {BaseVersion}.");
+                }
+
+                Dictionary<string, FieldInfo> seedFields = GetSeedConfigEntryFields()
+                    .ToDictionary(f => f.Name, StringComparer.Ordinal);
+
+                int importedCount = 0;
+
+                for (int i = 2; i < parts.Length; i++)
+                {
+                    string[] entryParts = parts[i].Split(':');
+                    if (entryParts.Length != 3)
+                        continue;
+
+                    if (!seedFields.TryGetValue(entryParts[0], out FieldInfo field))
+                        continue;
+
+                    try
+                    {
+                        object entry = field.GetValue(null);
+                        if (entry == null)
+                            continue;
+
+                        PropertyInfo valueProperty = field.FieldType.GetProperty("Value");
+                        if (valueProperty == null || !valueProperty.CanWrite)
+                            continue;
+
+                        Type targetType = field.FieldType.GetGenericArguments()[0];
+                        string rawValue = Uri.UnescapeDataString(entryParts[2]);
+                        object newValue = ConvertStringToValue(rawValue, targetType);
+
+                        valueProperty.SetValue(entry, newValue);
+                        importedCount++;
+                    }
+                    catch (Exception fieldEx)
+                    {
+                        Logger.LogWarning($"BVR - Could not import config seed field '{entryParts[0]}': {fieldEx.Message}");
+                    }
+                }
+
+                if (importedCount <= 0)
+                    return false;
+
+                Config.Save();
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning($"BVR - Config seed parse error: {ex.Message}");
+                return false;
+            }
+        }
+
+        private static IEnumerable<FieldInfo> GetSeedConfigEntryFields()
+        {
+            return typeof(Plugin)
+                .GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)
+                .Where(f => f.FieldType.IsGenericType && f.FieldType.GetGenericTypeDefinition() == typeof(ConfigEntry<>))
+                .Where(f => !f.IsDefined(typeof(SeedIgnoreAttribute), false))
+                .OrderBy(f => f.Name, StringComparer.Ordinal)
+                .ToList();
+        }
+
+        private static string GetTypeKey(Type type)
+        {
+            if (type == typeof(bool)) return "bool";
+            if (type == typeof(int)) return "int";
+            if (type == typeof(float)) return "float";
+            if (type == typeof(double)) return "double";
+            if (type == typeof(long)) return "long";
+            if (type == typeof(string)) return "string";
+            if (type.IsEnum) return "enum";
+
+            return type.Name.ToLowerInvariant();
+        }
+
+        private static string ConvertValueToString(object value, Type targetType)
+        {
+            if (value == null)
+                return string.Empty;
+
+            if (value is bool b)
+                return b ? "True" : "False";
+
+            if (value is float f)
+                return f.ToString("R", CultureInfo.InvariantCulture);
+
+            if (value is double d)
+                return d.ToString("R", CultureInfo.InvariantCulture);
+
+            if (value is int i)
+                return i.ToString(CultureInfo.InvariantCulture);
+
+            if (value is long l)
+                return l.ToString(CultureInfo.InvariantCulture);
+
+            if (value is Enum)
+                return value.ToString();
+
+            return Convert.ToString(value, CultureInfo.InvariantCulture) ?? string.Empty;
+        }
+
+        private static object ConvertStringToValue(string raw, Type targetType)
+        {
+            Type underlying = Nullable.GetUnderlyingType(targetType) ?? targetType;
+
+            if (underlying == typeof(string))
+                return raw ?? string.Empty;
+
+            if (string.IsNullOrEmpty(raw))
+            {
+                if (underlying.IsValueType)
+                    return Activator.CreateInstance(underlying);
+
+                return null;
+            }
+
+            if (underlying == typeof(bool))
+                return raw == "1" || bool.Parse(raw);
+
+            if (underlying == typeof(float))
+                return float.Parse(raw, NumberStyles.Float, CultureInfo.InvariantCulture);
+
+            if (underlying == typeof(double))
+                return double.Parse(raw, NumberStyles.Float, CultureInfo.InvariantCulture);
+
+            if (underlying == typeof(int))
+                return int.Parse(raw, CultureInfo.InvariantCulture);
+
+            if (underlying == typeof(long))
+                return long.Parse(raw, CultureInfo.InvariantCulture);
+
+            if (underlying.IsEnum)
+                return Enum.Parse(underlying, raw, true);
+
+            return Convert.ChangeType(raw, underlying, CultureInfo.InvariantCulture);
+        }
+
+        private static string ToUrlSafeBase64(string text)
+        {
+            byte[] bytes = Encoding.UTF8.GetBytes(text);
+
+            return Convert.ToBase64String(bytes, Base64FormattingOptions.None)
+                .Replace('+', '-')
+                .Replace('/', '_')
+                .TrimEnd('=');
+        }
+
+        private static string FromUrlSafeBase64(string data)
+        {
+            if (string.IsNullOrWhiteSpace(data))
+                return null;
+
+            data = new string(data.Trim().Where(c => !char.IsWhiteSpace(c)).ToArray());
+            data = data.Replace('-', '+').Replace('_', '/');
+
+            int mod = data.Length % 4;
+            if (mod == 2)
+                data += "==";
+            else if (mod == 3)
+                data += "=";
+            else if (mod == 1)
+                return null;
+
+            try
+            {
+                return Encoding.UTF8.GetString(Convert.FromBase64String(data));
+            }
+            catch
+            {
+                return null;
+            }
+        }
     }
+
+
 
     // ====================================================================================================
     // IMPORTANT NOTICES
@@ -3141,6 +3425,20 @@ namespace BalanceAndVarietyRework
     // ALKYON AB-4 CHANGES (FastBomber1)
     // Config Category: Alkyon AB-4 Changes
     // ====================================================================================================
+
+
+
+    // ====================================================================================================
+    // CONFIG SEED IGNORE ATTRIBUTE
+    // Marks ConfigEntry fields that should not be exported/imported by the config seed system.
+    // ====================================================================================================
+    [AttributeUsage(AttributeTargets.Field)]
+    internal sealed class SeedIgnoreAttribute : Attribute
+    {
+    }
+
+
+
 
     // ====================================================================================================
     // BepInEx ConfigurationManager Attributes (Duck-Typed)
