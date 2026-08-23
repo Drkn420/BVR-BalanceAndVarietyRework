@@ -28,7 +28,7 @@ namespace BalanceAndVarietyRework
     [BepInPlugin("com.Draken0015.BVR", "Balance and Variety Rework", BaseVersion)]
     public class Plugin : BaseUnityPlugin
     {
-        public const string BaseVersion = "1.1.4";
+        public const string BaseVersion = "1.1.5";
 
         // Expose the dynamically generated version hash for multiplayer desync checks.
         public static string FullVersionWithHash { get; private set; }
