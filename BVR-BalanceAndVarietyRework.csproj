@@ -4,7 +4,7 @@
     <TargetFramework>net472</TargetFramework>
     <AssemblyName>BVR-BalanceAndVarietyRework-Dev</AssemblyName>
     <Description>Nuclear Option - Balance and Variety Rework</Description>
-    <Version>1.1.3</Version>
+    <Version>1.1.4</Version>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <LangVersion>latest</LangVersion>
 
