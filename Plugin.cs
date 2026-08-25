@@ -1,6 +1,8 @@
 using BepInEx;
 using BepInEx.Configuration;
 using HarmonyLib;
+using Mirage;
+using NuclearOption.Networking;
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -11,20 +13,12 @@ using System.Security.Cryptography;
 using System.Text;
 using UnityEngine;
 
-
-
 namespace BalanceAndVarietyRework
 {
-
-
-
     // ====================================================================================================
     // PLUGIN CORE
     // Central plugin class. Owns config binding, config seed export/import, version hashing, and Harmony registration.
     // ====================================================================================================
-
-
-
     [BepInPlugin("com.Draken0015.BVR", "Balance and Variety Rework", BaseVersion)]
     public class Plugin : BaseUnityPlugin
     {
@@ -38,6 +32,15 @@ namespace BalanceAndVarietyRework
 
         // Cached reflection result for the seed system. This avoids repeated reflection passes.
         private static FieldInfo[] cachedSeedFields;
+
+        // Runtime plugin instance used by static network/event helpers.
+        public static Plugin Instance { get; private set; }
+
+        // Set while a seed import is being applied so SettingChanged handlers do not spam refreshes.
+        internal static bool IsApplyingConfigSeed { get; private set; }
+
+        // Prevent recursive display/hash refreshes.
+        private static bool isRefreshingVersionDisplay;
 
         // ================================================================================================
         // CONFIGURATION ENTRY DEFINITIONS
@@ -55,7 +58,18 @@ namespace BalanceAndVarietyRework
         [SeedIgnore]
         public static ConfigEntry<string> ImportConfigSeed;
 
+        [SeedIgnore]
+        public static ConfigEntry<string> AppliedConfigHashDisplay;
+
+        [SeedIgnore]
+        public static ConfigEntry<string> AppliedConfigSeedDisplay;
+
+        // Internal snapshot of the config state that is actually applied to the current game/session.
+        private static string appliedNetworkSeed;
+        private static string appliedNetworkVersion;
+
         // Missile Balance Entries
+
         // IR Missiles Buff Entries
         public static ConfigEntry<bool> EnableIRMissilesBuff;
         public static ConfigEntry<float> FlareCountMultiplier;
@@ -123,43 +137,64 @@ namespace BalanceAndVarietyRework
         public static ConfigEntry<bool> EnableMedusaSAMRadar2Single;
         public static ConfigEntry<bool> EnableMedusaSAMRadar2Double;
 
+        // Network Handshake Entries
+        [SeedIgnore]
+        public static ConfigEntry<bool> EnableAutomaticSeedHandshake;
 
+        [SeedIgnore]
+        public static ConfigEntry<bool> AllowHostSeedOverwrite;
+
+        [SeedIgnore]
+        public static ConfigEntry<bool> AllowHandshakeRequestFromUnknownServers;
+
+        [SeedIgnore]
+        public static ConfigEntry<bool> MarkServerAsModded;
+
+        [SeedIgnore]
+        public static ConfigEntry<string> NetworkHandshakeStatus;
 
         // ================================================================================================
         // UNITY / BEPINEX LIFECYCLE
         // ================================================================================================
-
-
-
         private void Awake()
         {
+            Instance = this;
+
             // 1. Bind notices FIRST so they remain pinned at the top of ConfigManager.
             BindImportantNotices();
 
             // 2. Bind all functional configuration entries.
             BindFunctionalConfigs();
 
-            // 3. Import a pending configuration seed before hash generation and before Harmony patches run.
+            // 3. Bind network handshake entries.
+            BindNetworkHandshakeConfigs();
+
+            // 4. Import a pending configuration seed before hash generation and before Harmony patches run.
             // This preserves the normal workflow: paste seed -> restart -> imported settings load.
             TryImportPendingConfigSeed();
 
-            // 4. Generate the config hash/version and update the display entries.
+            // 5. Generate the config hash/version and update the display entries.
             FinalizeVersionAndHash();
 
-            // 5. Register all Harmony patches.
+            // 6. Initialize runtime feature management.
+            // This system is responsible for applying/unapplying practical changes.
+            FeatureRuntimeManager.Initialize();
+
+            // 7. Initialize event-driven config refresh.
+            ConfigSeedEvents.Initialize();
+
+            // 8. Initialize the network handshake service.
+            NetworkSeedHandshake.Initialize();
+
+            // 9. Register all Harmony patches.
             RegisterHarmonyPatches();
 
             Logger.LogInfo("BVR - Balance and Variety Rework Mod Loaded!");
         }
 
-
-
         // ================================================================================================
         // CONFIG BINDING
         // ================================================================================================
-
-
-
         private void BindImportantNotices()
         {
             Config.Bind(
@@ -200,6 +235,24 @@ namespace BalanceAndVarietyRework
                     null,
                     new ConfigurationManagerAttributes { ReadOnly = true, HideDefaultButton = true, Order = 97 }));
 
+            AppliedConfigHashDisplay = Config.Bind(
+                "Important Notices",
+                "Applied Config Hash",
+                "Not applied yet",
+                new ConfigDescription(
+                    "The hash of the configuration that is actually applied to this game session. This may differ from Current Config Hash if settings were changed and the game has not been restarted.",
+                    null,
+                    new ConfigurationManagerAttributes { ReadOnly = true, HideDefaultButton = true, Order = 96 }));
+
+            AppliedConfigSeedDisplay = Config.Bind(
+                "Important Notices",
+                "Applied Config Seed",
+                "Not applied yet",
+                new ConfigDescription(
+                    "The seed of the configuration that is actually applied to this game session. Network clients receive this applied state, not manually edited pending settings.",
+                    null,
+                    new ConfigurationManagerAttributes { ReadOnly = true, HideDefaultButton = true, Order = 95 }));
+
             ImportConfigSeed = Config.Bind(
                 "Important Notices",
                 "Import Config Seed",
@@ -207,14 +260,13 @@ namespace BalanceAndVarietyRework
                 new ConfigDescription(
                     "Paste a Balance and Variety Rework configuration seed here, then restart the game to import that configuration.",
                     null,
-                    new ConfigurationManagerAttributes { HideDefaultButton = true, Order = 96 }));
+                    new ConfigurationManagerAttributes { HideDefaultButton = true, Order = 94 }));
         }
-
-
 
         private void BindFunctionalConfigs()
         {
             // Missile Balance Changes
+
             // IR Missiles Buff
             EnableIRMissilesBuff = Config.Bind("Missile Balance Changes", "Enable IR Missiles Buff", true, "Master toggle to enable the custom flare rejection and flare count multipliers.");
             FlareCountMultiplier = Config.Bind("Missile Balance Changes", "Flare Count Multiplier", 2.0f, "Multiplies the total number of flares on all aircraft (e.g., 2.0 = double flares, 0.5 = half flares).");
@@ -287,7 +339,43 @@ namespace BalanceAndVarietyRework
             EnableMedusaSAMRadar2Double = Config.Bind("EW-25 Medusa Changes", "Enable Medusa R9 Stratolance x2", true, "Enables the R9 Stratolance x2 mount on the Medusa's hardpoint set 4.");
         }
 
+        private void BindNetworkHandshakeConfigs()
+        {
+            EnableAutomaticSeedHandshake = Config.Bind(
+                "Network Handshake",
+                "Enable Automatic Seed Handshake",
+                true,
+                "When enabled, this mod can request and receive the host's BVR configuration seed over the network.");
 
+            AllowHostSeedOverwrite = Config.Bind(
+                "Network Handshake",
+                "Allow Host Seed To Override Local Config",
+                true,
+                "When enabled, a valid host seed received from the server will overwrite this client's BVR functional settings.");
+
+            AllowHandshakeRequestFromUnknownServers = Config.Bind(
+                "Network Handshake",
+                "Allow Handshake Request From Unknown Servers",
+                false,
+                "If false, the client only requests a seed when the server is already marked as modded. " +
+                "Enable this only for trusted modded servers that are not correctly marked as modded. " +
+                "Sending handshake requests to vanilla servers may cause connection errors.");
+
+            MarkServerAsModded = Config.Bind(
+                "Network Handshake",
+                "Mark Server As Modded",
+                true,
+                "When hosting, marks this server as modded so clients can identify that BVR is present.");
+
+            NetworkHandshakeStatus = Config.Bind(
+                "Network Handshake",
+                "Network Handshake Status",
+                "Idle",
+                new ConfigDescription(
+                    "Current handshake state. Diagnostic only.",
+                    null,
+                    new ConfigurationManagerAttributes { ReadOnly = true, HideDefaultButton = true, Order = 93 }));
+        }
 
         private void TryImportPendingConfigSeed()
         {
@@ -296,90 +384,134 @@ namespace BalanceAndVarietyRework
 
             string pendingSeed = ImportConfigSeed.Value;
 
-            if (TryImportConfigSeed(pendingSeed))
-            {
-                Logger.LogInfo("BVR - Configuration seed imported successfully during startup.");
-            }
-            else
-            {
-                Logger.LogWarning("BVR - Configuration seed import failed during startup. The seed was invalid or from an incompatible mod version.");
-            }
+            IsApplyingConfigSeed = true;
 
-            // Consume the import seed so it does not try to apply again on every launch.
-            ImportConfigSeed.Value = string.Empty;
+            try
+            {
+                if (TryImportConfigSeed(pendingSeed))
+                {
+                    Logger.LogInfo("BVR - Configuration seed imported successfully during startup.");
+                }
+                else
+                {
+                    Logger.LogWarning("BVR - Configuration seed import failed during startup. The seed was invalid or from an incompatible mod version.");
+                }
+            }
+            finally
+            {
+                // Consume the import seed so it does not try to apply again on every launch.
+                ImportConfigSeed.Value = string.Empty;
+                IsApplyingConfigSeed = false;
+            }
         }
-
-
 
         private void FinalizeVersionAndHash()
         {
-            string configHash = GenerateConfigHash();
-            FullVersionWithHash = $"{BaseVersion}-{configHash}";
-
-            configHashDisplay.Value = configHash;
-            CurrentConfigSeed.Value = GenerateConfigSeed();
-
+            RefreshVersionAndHash();
             Config.Save();
             Logger.LogInfo($"Mod Version Loaded: {FullVersionWithHash}");
         }
 
+        internal void RefreshVersionAndHash()
+        {
+            if (isRefreshingVersionDisplay)
+                return;
 
+            isRefreshingVersionDisplay = true;
+
+            try
+            {
+                string configHash = GenerateConfigHash();
+
+                FullVersionWithHash = $"{BaseVersion}-{configHash}";
+                configHashDisplay.Value = configHash;
+                CurrentConfigSeed.Value = GenerateConfigSeed();
+            }
+            finally
+            {
+                isRefreshingVersionDisplay = false;
+            }
+        }
+
+        internal void MarkAppliedConfigState()
+        {
+            string hash = GenerateConfigHash();
+            string seed = GenerateConfigSeed();
+
+            appliedNetworkSeed = seed;
+            appliedNetworkVersion = $"{BaseVersion}-{hash}";
+
+            if (AppliedConfigHashDisplay != null)
+                AppliedConfigHashDisplay.Value = hash;
+
+            if (AppliedConfigSeedDisplay != null)
+                AppliedConfigSeedDisplay.Value = seed;
+        }
+
+        internal string GetCurrentConfigSeed()
+        {
+            return GenerateConfigSeed();
+        }
+
+        internal string GetAppliedNetworkSeed()
+        {
+            if (string.IsNullOrEmpty(appliedNetworkSeed))
+                MarkAppliedConfigState();
+
+            return appliedNetworkSeed;
+        }
+
+        internal string GetAppliedNetworkVersion()
+        {
+            if (string.IsNullOrEmpty(appliedNetworkVersion))
+                MarkAppliedConfigState();
+
+            return appliedNetworkVersion;
+        }
+
+        internal bool TryApplyRuntimeConfigSeed(string seed)
+        {
+            if (string.IsNullOrWhiteSpace(seed))
+                return false;
+
+            IsApplyingConfigSeed = true;
+
+            try
+            {
+                bool imported = TryImportConfigSeed(seed);
+
+                if (imported)
+                {
+                    // Refresh current hash/seed display.
+                    ConfigSeedEvents.NotifyFunctionalChange();
+
+                    // Network seeds are authoritative and may apply/unapply practical changes immediately.
+                    FeatureRuntimeManager.SyncFromNetwork();
+                }
+
+                return imported;
+            }
+            finally
+            {
+                IsApplyingConfigSeed = false;
+            }
+        }
 
         private void RegisterHarmonyPatches()
         {
             // Keep this list explicit. It documents every active patch class and avoids accidental assembly-wide patching.
             Type[] patchTypes =
             {
-                // Missile balance changes
-                typeof(StatsPatch),
-                typeof(SARHLockPersistencePatch),
+                // Central runtime feature trigger.
+                typeof(FeatureRuntimeTriggerPatch),
+
+                // SARH relock still needs a Harmony hook for newly initialized missiles.
                 typeof(SARHRelockPatch),
 
-                // Cricket changes
-                typeof(CricketLynchpinx14DoublePatch),
-                typeof(CricketKingpinx8DoublePatch),
-
-                // Compass changes
-                typeof(CompassLynchpinx14DoublePatch),
-                typeof(CompassKingpinx8DoublePatch),
-
-                // Vagrant changes
-                typeof(VagrantLynchpinx14DoublePatch),
-                typeof(VagrantKingpinx8DoublePatch),
-
-                // Ibis changes
-                typeof(IbisLynchpinx14DoublePatch),
-                typeof(IbisKingpinx8DoublePatch),
-
-                // Chicane changes
-                typeof(ProxyGunPatch),
-                typeof(ChicaneScythePatch),
-                typeof(ChicaneInternalLynchpinx14Patch),
-                typeof(ChicaneInternalKingpinx8Patch),
-                typeof(ChicaneBayPylonSymmetryFixPatch),
-
-                // Revoker changes
-                typeof(RevokerLynchpinx14DoublePatch),
-                typeof(RevokerKingpinx8DoublePatch),
-
-                // Vortex changes
-                typeof(VortexLynchpinx14DoublePatch),
-                typeof(VortexKingpinx8DoublePatch),
-
-                // Tarantula changes
-                typeof(TarantulaLynchpinx14DoublePatch),
-                typeof(TarantulaKingpinx8DoublePatch),
-
-                // Ifrit changes
-                typeof(IfritLynchpinx14DoublePatch),
-                typeof(IfritKingpinx8DoublePatch),
-
-                // Medusa changes
-                typeof(MedusaLaserPatch),
-                typeof(MedusaLynchpinx14DoublePatch),
-                typeof(MedusaKingpinx8DoublePatch),
-                typeof(MedusaSAMRadar2SinglePatch),
-                typeof(MedusaSAMRadar2DoublePatch)
+                // Network handshake
+                typeof(BVRServerSeedHandshakePatch),
+                typeof(BVRClientSeedReceivePatch),
+                typeof(BVRClientSeedRequestPatch)
             };
 
             foreach (Type patchType in patchTypes)
@@ -388,8 +520,6 @@ namespace BalanceAndVarietyRework
             }
         }
 
-
-
         // ================================================================================================
         // CONFIG SEED EXPORT / IMPORT
         // Seed format:
@@ -397,13 +527,8 @@ namespace BalanceAndVarietyRework
         // Payload:
         // BVRSEED|<mod version>|<FieldName>:<type>:<escaped value>|...
         // ================================================================================================
-
-
-
         private const string SeedFormatPrefix = "BVR1";
         private const string SeedPayloadPrefix = "BVRSEED";
-
-
 
         private string GenerateConfigHash()
         {
@@ -416,14 +541,10 @@ namespace BalanceAndVarietyRework
             }
         }
 
-
-
         private string GenerateConfigSeed()
         {
             return $"{SeedFormatPrefix}-{ToUrlSafeBase64(GenerateSeedPayload(true))}";
         }
-
-
 
         private string GenerateSeedPayload(bool includeSeedMetadata)
         {
@@ -437,10 +558,12 @@ namespace BalanceAndVarietyRework
             foreach (FieldInfo field in GetSeedConfigEntryFields())
             {
                 object entry = field.GetValue(null);
+
                 if (entry == null)
                     continue;
 
                 PropertyInfo valueProperty = field.FieldType.GetProperty("Value");
+
                 if (valueProperty == null || !valueProperty.CanRead)
                     continue;
 
@@ -458,8 +581,6 @@ namespace BalanceAndVarietyRework
             return payload.ToString();
         }
 
-
-
         private bool TryImportConfigSeed(string seed)
         {
             try
@@ -473,10 +594,12 @@ namespace BalanceAndVarietyRework
                     seed = seed.Substring(SeedFormatPrefix.Length + 1);
 
                 string payload = FromUrlSafeBase64(seed);
+
                 if (string.IsNullOrEmpty(payload))
                     return false;
 
                 string[] parts = payload.Split('|');
+
                 if (parts.Length < 2 || parts[0] != SeedPayloadPrefix)
                     return false;
 
@@ -493,19 +616,23 @@ namespace BalanceAndVarietyRework
                 for (int i = 2; i < parts.Length; i++)
                 {
                     string[] entryParts = parts[i].Split(':');
+
                     if (entryParts.Length != 3)
                         continue;
 
-                    if (!seedFields.TryGetValue(entryParts[0], out FieldInfo field))
+                    FieldInfo field;
+                    if (!seedFields.TryGetValue(entryParts[0], out field))
                         continue;
 
                     try
                     {
                         object entry = field.GetValue(null);
+
                         if (entry == null)
                             continue;
 
                         PropertyInfo valueProperty = field.FieldType.GetProperty("Value");
+
                         if (valueProperty == null || !valueProperty.CanWrite)
                             continue;
 
@@ -535,9 +662,7 @@ namespace BalanceAndVarietyRework
             }
         }
 
-
-
-        private static FieldInfo[] GetSeedConfigEntryFields()
+        internal static FieldInfo[] GetSeedConfigEntryFields()
         {
             // Cache the reflected field list. Config entry fields are static and do not change at runtime.
             if (cachedSeedFields == null)
@@ -553,8 +678,6 @@ namespace BalanceAndVarietyRework
             return cachedSeedFields;
         }
 
-
-
         private static string GetTypeKey(Type type)
         {
             if (type == typeof(bool)) return "bool";
@@ -564,11 +687,8 @@ namespace BalanceAndVarietyRework
             if (type == typeof(long)) return "long";
             if (type == typeof(string)) return "string";
             if (type.IsEnum) return "enum";
-
             return type.Name.ToLowerInvariant();
         }
-
-
 
         private static string ConvertValueToString(object value, Type targetType)
         {
@@ -595,8 +715,6 @@ namespace BalanceAndVarietyRework
 
             return Convert.ToString(value, CultureInfo.InvariantCulture) ?? string.Empty;
         }
-
-
 
         private static object ConvertStringToValue(string raw, Type targetType)
         {
@@ -634,8 +752,6 @@ namespace BalanceAndVarietyRework
             return Convert.ChangeType(raw, underlying, CultureInfo.InvariantCulture);
         }
 
-
-
         private static string ToUrlSafeBase64(string text)
         {
             byte[] bytes = Encoding.UTF8.GetBytes(text);
@@ -645,8 +761,6 @@ namespace BalanceAndVarietyRework
                 .Replace('/', '_')
                 .TrimEnd('=');
         }
-
-
 
         private static string FromUrlSafeBase64(string data)
         {
@@ -676,14 +790,192 @@ namespace BalanceAndVarietyRework
         }
     }
 
+    // ====================================================================================================
+    // CONFIG SEED EVENTS
+    // Event-driven config change detection. Recalculates the seed/hash when functional config entries
+    // are changed, without using Update loops.
+    // ====================================================================================================
+    internal static class ConfigSeedEvents
+    {
+        public static event Action FunctionalConfigChanged;
 
+        private static bool initialized = false;
+        private static bool isBroadcasting = false;
+
+        public static void Initialize()
+        {
+            if (initialized)
+                return;
+
+            initialized = true;
+
+            foreach (FieldInfo field in Plugin.GetSeedConfigEntryFields())
+            {
+                object entry = field.GetValue(null);
+
+                if (entry == null)
+                    continue;
+
+                EventInfo settingChanged = field.FieldType.GetEvent(
+                    "SettingChanged",
+                    BindingFlags.Public | BindingFlags.Instance);
+
+                if (settingChanged == null)
+                    continue;
+
+                MethodInfo addMethod = settingChanged.GetAddMethod(true);
+
+                if (addMethod == null)
+                    continue;
+
+                addMethod.Invoke(entry, new object[] { new EventHandler(OnSettingChanged) });
+            }
+        }
+
+        private static void OnSettingChanged(object sender, EventArgs e)
+        {
+            if (Plugin.IsApplyingConfigSeed || isBroadcasting)
+                return;
+
+            NotifyFunctionalChange();
+        }
+
+        public static void NotifyFunctionalChange()
+        {
+            if (isBroadcasting)
+                return;
+
+            isBroadcasting = true;
+
+            try
+            {
+                Plugin instance = Plugin.Instance;
+
+                if (instance != null)
+                    instance.RefreshVersionAndHash();
+
+                Action handler = FunctionalConfigChanged;
+
+                if (handler != null)
+                    handler();
+            }
+            finally
+            {
+                isBroadcasting = false;
+            }
+        }
+    }
+
+    // ====================================================================================================
+    // NETWORK SEED HANDSHAKE SERVICE
+    // Builds, parses, and applies the host config seed message.
+    // Message format:
+    // BVRNET1|<mod version>|<full version/hash>|<config seed>
+    // ====================================================================================================
+    internal static class NetworkSeedHandshake
+    {
+        private const string MessagePrefix = "BVRNET1";
+        private static string lastAppliedMessage = null;
+
+        public static void Initialize()
+        {
+            if (!IsEnabled())
+            {
+                SetStatus("Disabled");
+                return;
+            }
+
+            SetStatus("Ready");
+        }
+
+        public static void SetStatus(string status)
+        {
+            if (Plugin.NetworkHandshakeStatus == null)
+                return;
+
+            if (Plugin.NetworkHandshakeStatus.Value == status)
+                return;
+
+            Plugin.NetworkHandshakeStatus.Value = status;
+        }
+
+        public static string BuildHostSeedMessage()
+        {
+            Plugin instance = Plugin.Instance;
+
+            if (instance == null)
+                return string.Empty;
+
+            // IMPORTANT:
+            // The server sends the APPLIED configuration snapshot, not the live ConfigManager values.
+            // This prevents accidental/manual mid-match config edits from becoming network-authoritative.
+            return $"{MessagePrefix}|{Plugin.BaseVersion}|{instance.GetAppliedNetworkVersion()}|{instance.GetAppliedNetworkSeed()}";
+        }
+
+        public static bool TryParseHostSeedMessage(string message, out string seed)
+        {
+            seed = null;
+
+            if (string.IsNullOrWhiteSpace(message))
+                return false;
+
+            string[] parts = message.Split('|');
+
+            if (parts.Length < 4 || parts[0] != MessagePrefix)
+                return false;
+
+            seed = parts[3];
+
+            return !string.IsNullOrWhiteSpace(seed);
+        }
+
+        public static void OnHostSeedReceived(string message)
+        {
+            if (!IsEnabled())
+                return;
+
+            if (Plugin.AllowHostSeedOverwrite == null || !Plugin.AllowHostSeedOverwrite.Value)
+            {
+                SetStatus("Host seed overwrite disabled");
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(message) || message == lastAppliedMessage)
+                return;
+
+            string seed;
+
+            if (!TryParseHostSeedMessage(message, out seed))
+                return;
+
+            Plugin instance = Plugin.Instance;
+
+            if (instance == null)
+                return;
+
+            if (instance.TryApplyRuntimeConfigSeed(seed))
+            {
+                lastAppliedMessage = message;
+                SetStatus($"Host seed applied: {Plugin.FullVersionWithHash}");
+                Debug.Log("BVR - Host configuration seed applied at runtime.");
+            }
+            else
+            {
+                SetStatus("Host seed rejected");
+                Debug.LogWarning("BVR - Received host configuration seed was rejected.");
+            }
+        }
+
+        private static bool IsEnabled()
+        {
+            return Plugin.EnableAutomaticSeedHandshake != null && Plugin.EnableAutomaticSeedHandshake.Value;
+        }
+    }
 
     // ====================================================================================================
     // SHARED SUPPORT TYPES
     // Small shared attributes and helper classes used across the mod.
     // ====================================================================================================
-
-
 
     // Marks ConfigEntry fields that should not be exported/imported by the config seed system.
     [AttributeUsage(AttributeTargets.Field)]
@@ -691,7 +983,26 @@ namespace BalanceAndVarietyRework
     {
     }
 
+    // Marks a class as a runtime feature that can be applied/unapplied by the handshake system.
+    // Feature classes must implement:
+    //   public static void Apply()
+    //   public static void Unapply()
+    // Optionally:
+    //   public static bool IsEnabled()
+    // If IsEnabled is not present, ToggleField is used to read a bool ConfigEntry from Plugin.
+    [AttributeUsage(AttributeTargets.Class)]
+    internal sealed class BvrFeatureAttribute : Attribute
+    {
+        public string Id { get; }
+        public string ToggleField { get; set; }
+        public int Order { get; set; }
 
+        public BvrFeatureAttribute(string id)
+        {
+            Id = id;
+            Order = 1000;
+        }
+    }
 
     // BepInEx ConfigurationManager attributes (duck-typed).
     // This type is intentionally internal and field-based. Configuration Manager reads it by convention.
@@ -704,14 +1015,46 @@ namespace BalanceAndVarietyRework
     }
 #pragma warning restore CS0169, CS0414, CS0649
 
-
-
     // Marker component used to prevent double-modification of prefab/component stats.
     public class ModifiedStatsFlag : MonoBehaviour
     {
     }
 
+    // Backup components used to make runtime changes reversible.
+    public class BVRIntPairBackup : MonoBehaviour
+    {
+        public int value1;
+        public int value2;
+    }
 
+    public class BVRFloatBackup : MonoBehaviour
+    {
+        public float value;
+    }
+
+    public class BVRBoolBackup : MonoBehaviour
+    {
+        public bool value;
+    }
+
+    public class BVRVector3Backup : MonoBehaviour
+    {
+        public Vector3 value;
+    }
+
+    internal static class BVRBackupUtility
+    {
+        public static void DestroyComponent(Component component)
+        {
+            if (component == null)
+                return;
+
+            if (component.gameObject != null && component.gameObject.scene.IsValid())
+                UnityEngine.Object.Destroy(component);
+            else
+                UnityEngine.Object.DestroyImmediate(component);
+        }
+    }
 
     // Shared name helpers. Nuclear Option object names often include "(Clone)" at runtime.
     internal static class ObjectNameUtility
@@ -754,16 +1097,11 @@ namespace BalanceAndVarietyRework
         }
     }
 
-
-
     // ====================================================================================================
     // SHARED PREFAB VAULT
     // Shared hidden storage object for custom weapon prefabs.
     // Future weapon prefab generation patches should use this instead of creating their own vaults.
     // ====================================================================================================
-
-
-
     internal static class PrefabVault
     {
         private static GameObject vault;
@@ -785,17 +1123,12 @@ namespace BalanceAndVarietyRework
         }
     }
 
-
-
     // ====================================================================================================
     // CUSTOM WEAPONS - REUSED ASSETS
     // Shared generation framework for duplicated/reused weapon prefabs and mounts.
     // These weapon prefabs are aircraft-agnostic and exist independently of any specific airframe.
     // Future custom weapon patches that reuse existing assets should use this section.
     // ====================================================================================================
-
-
-
     internal static class CustomWeaponsReusedAssets
     {
         private static WeaponMount externalSAMRadar2SingleMount;
@@ -811,26 +1144,22 @@ namespace BalanceAndVarietyRework
         // Info assets are loaded once and cached. They should not change during a game session.
         private static readonly Dictionary<string, UnityEngine.Object> infoAssetCache = new Dictionary<string, UnityEngine.Object>();
 
-
-
         // ================================================================================================
         // PUBLIC MOUNT FACTORIES
         // ================================================================================================
-
-
-
         public static WeaponMount GetExternalSAMRadar2Single()
         {
             if (externalSAMRadar2SingleMount != null)
                 return externalSAMRadar2SingleMount;
 
             WeaponMount sourceMount = FindSourceMount("AAM4_single", "AAM4_single", null);
+
             if (sourceMount == null)
                 return null;
 
             GameObject singlePrefab = ClonePrefabToVault(sourceMount.prefab, "SAM_Radar2_single");
-
             GameObject originalSamPrefab = FindOriginalSamRadar2Prefab();
+
             if (originalSamPrefab != null)
             {
                 Transform pylon = singlePrefab.transform.Find("pylon");
@@ -850,12 +1179,11 @@ namespace BalanceAndVarietyRework
             AssignWeaponInfo(singlePrefab, "info_SAM_Radar2", "MountedMissile");
 
             externalSAMRadar2SingleMount = CreateConfiguredMount(sourceMount, singlePrefab, "R9 Stratolance x1", "SAM_Radar2_single");
+
             Debug.Log("[ExternalSAMRadar2Single] Custom R9 Stratolance x1 prefab and mount generation complete!");
 
             return externalSAMRadar2SingleMount;
         }
-
-
 
         public static WeaponMount GetExternalSAMRadar2Double()
         {
@@ -863,15 +1191,17 @@ namespace BalanceAndVarietyRework
                 return externalSAMRadar2DoubleMount;
 
             WeaponMount sourceMount = FindSourceMount("ARM1_double", "ARM1_double", null);
+
             if (sourceMount == null)
                 return null;
 
             GameObject doublePrefab = ClonePrefabToVault(sourceMount.prefab, "SAM_Radar2_double");
-
             GameObject originalSamPrefab = FindOriginalSamRadar2Prefab();
+
             if (originalSamPrefab != null)
             {
                 int swappedMissiles = 0;
+
                 Transform[] allChildren = doublePrefab.GetComponentsInChildren<Transform>(true);
 
                 foreach (Transform child in allChildren)
@@ -887,6 +1217,7 @@ namespace BalanceAndVarietyRework
                         continue;
 
                     Transform missileChild = child.Find("ARM1");
+
                     if (missileChild == null)
                         continue;
 
@@ -908,12 +1239,11 @@ namespace BalanceAndVarietyRework
             AssignWeaponInfo(doublePrefab, "info_SAM_Radar2", "MountedMissile");
 
             externalSAMRadar2DoubleMount = CreateConfiguredMount(sourceMount, doublePrefab, "R9 Stratolance x2", "SAM_Radar2_double");
+
             Debug.Log("[ExternalSAMRadar2Double] Custom R9 Stratolance x2 prefab and mount generation complete!");
 
             return externalSAMRadar2DoubleMount;
         }
-
-
 
         public static WeaponMount GetExternalLynchpinx14Double()
         {
@@ -921,6 +1251,7 @@ namespace BalanceAndVarietyRework
                 return externalLynchpinx14DoubleMount;
 
             WeaponMount sourceMount = FindSourceMount(null, "RocketPod1_single", null);
+
             if (sourceMount == null)
                 return null;
 
@@ -928,6 +1259,7 @@ namespace BalanceAndVarietyRework
             doublePrefab.transform.localPosition = Vector3.zero;
 
             Transform firstPod = doublePrefab.transform.Find("pod");
+
             if (firstPod != null)
             {
                 firstPod.localPosition = new Vector3(0.13f, -0.15f, 0.19f);
@@ -940,12 +1272,11 @@ namespace BalanceAndVarietyRework
             }
 
             externalLynchpinx14DoubleMount = CreateConfiguredMount(sourceMount, doublePrefab, "AGR-18 Lynchpin x14", "RocketPod1_double");
+
             Debug.Log("[ExternalLynchpinx14Double] Custom double Lynchpin prefab and mount generation complete!");
 
             return externalLynchpinx14DoubleMount;
         }
-
-
 
         public static WeaponMount GetExternalKingpinx8Double()
         {
@@ -953,6 +1284,7 @@ namespace BalanceAndVarietyRework
                 return externalKingpinx8DoubleMount;
 
             WeaponMount sourceMount = FindSourceMount(null, "Rocket2_4Pod", "Rocket2_4Pod");
+
             if (sourceMount == null)
                 return null;
 
@@ -960,6 +1292,7 @@ namespace BalanceAndVarietyRework
             doublePrefab.transform.localPosition = new Vector3(0f, -0.1f, 0f);
 
             Transform firstPod = doublePrefab.transform.Find("pod");
+
             if (firstPod != null)
             {
                 firstPod.localPosition = new Vector3(0.14f, -0.15f, -0.005f);
@@ -976,18 +1309,18 @@ namespace BalanceAndVarietyRework
 
             // Reposition the pylon child to correct alignment.
             Transform pylon = doublePrefab.transform.Find("pylon");
+
             if (pylon != null)
             {
                 pylon.localPosition = new Vector3(0f, 0.038f, 0f);
             }
 
             externalKingpinx8DoubleMount = CreateConfiguredMount(sourceMount, doublePrefab, "AGR-24 Kingpin x8", "Rocket2_4Podx2");
+
             Debug.Log("[ExternalKingpinx8Double] Custom double Kingpin prefab and mount generation complete!");
 
             return externalKingpinx8DoubleMount;
         }
-
-
 
         public static WeaponMount GetInternalLynchpinx14Double()
         {
@@ -995,6 +1328,7 @@ namespace BalanceAndVarietyRework
                 return internalLynchpinx14DoubleMount;
 
             WeaponMount sourceMount = FindSourceMount(null, "RocketPod1_single", null);
+
             if (sourceMount == null)
                 return null;
 
@@ -1002,6 +1336,7 @@ namespace BalanceAndVarietyRework
             doublePrefab.transform.localPosition = new Vector3(0f, -0.05f, 0f);
 
             Transform firstPod = doublePrefab.transform.Find("pod");
+
             if (firstPod != null)
             {
                 firstPod.localPosition = new Vector3(0.13f, -0.15f, 0.19f);
@@ -1018,6 +1353,7 @@ namespace BalanceAndVarietyRework
             SetMountedMissileRailDelay(doublePrefab, InternalLynchpinRailDelay);
 
             internalLynchpinx14DoubleMount = CreateConfiguredMount(sourceMount, doublePrefab, "AGR-18 Lynchpin x14", "RocketPod1_double_internal");
+
             EnableMissileBay(internalLynchpinx14DoubleMount);
 
             Debug.Log("[InternalLynchpinx14Double] Custom internal double Lynchpin prefab and mount generation complete!");
@@ -1025,14 +1361,13 @@ namespace BalanceAndVarietyRework
             return internalLynchpinx14DoubleMount;
         }
 
-
-
         public static WeaponMount GetInternalKingpinx8Double()
         {
             if (internalKingpinx8DoubleMount != null)
                 return internalKingpinx8DoubleMount;
 
             WeaponMount sourceMount = FindSourceMount(null, "Rocket2_4Pod", "Rocket2_4Pod");
+
             if (sourceMount == null)
                 return null;
 
@@ -1040,6 +1375,7 @@ namespace BalanceAndVarietyRework
             doublePrefab.transform.localPosition = new Vector3(0f, -0.11f, 0.13f);
 
             Transform firstPod = doublePrefab.transform.Find("pod");
+
             if (firstPod != null)
             {
                 firstPod.localPosition = new Vector3(0.14f, -0.15f, -0.005f);
@@ -1056,6 +1392,7 @@ namespace BalanceAndVarietyRework
 
             // Reposition the pylon child to correct internal bay alignment.
             Transform pylon = doublePrefab.transform.Find("pylon");
+
             if (pylon != null)
             {
                 pylon.localPosition = new Vector3(0f, 0.038f, 0f);
@@ -1066,6 +1403,7 @@ namespace BalanceAndVarietyRework
             SetMountedMissileRailDelay(doublePrefab, InternalKingpinRailDelay);
 
             internalKingpinx8DoubleMount = CreateConfiguredMount(sourceMount, doublePrefab, "AGR-24 Kingpin x8", "Rocket2_4Podx2_internal");
+
             EnableMissileBay(internalKingpinx8DoubleMount);
 
             Debug.Log("[InternalKingpinx8Double] Custom internal double Kingpin prefab and mount generation complete!");
@@ -1073,14 +1411,9 @@ namespace BalanceAndVarietyRework
             return internalKingpinx8DoubleMount;
         }
 
-
-
         // ================================================================================================
         // MOUNT / PREFAB CREATION HELPERS
         // ================================================================================================
-
-
-
         private static WeaponMount FindSourceMount(string jsonKey, string name, string fallbackPrefabName)
         {
             WeaponMount[] allMounts = Resources.FindObjectsOfTypeAll<WeaponMount>();
@@ -1098,8 +1431,6 @@ namespace BalanceAndVarietyRework
             return mount != null && mount.prefab != null ? mount : null;
         }
 
-
-
         private static GameObject ClonePrefabToVault(GameObject sourcePrefab, string prefabName)
         {
             if (sourcePrefab == null)
@@ -1114,8 +1445,6 @@ namespace BalanceAndVarietyRework
             return prefab;
         }
 
-
-
         private static WeaponMount CreateConfiguredMount(WeaponMount sourceMount, GameObject prefab, string mountName, string jsonKey)
         {
             if (sourceMount == null || prefab == null)
@@ -1126,14 +1455,13 @@ namespace BalanceAndVarietyRework
             newMount.prefab = prefab;
 
             Traverse traverseMount = Traverse.Create(newMount);
+
             SetMountField(traverseMount, "mountName", mountName);
             SetMountField(traverseMount, "jsonKey", jsonKey);
             SetNetworkLookupIndex(traverseMount, jsonKey);
 
             return newMount;
         }
-
-
 
         private static void SetMountField(Traverse traverseMount, string fieldName, string value)
         {
@@ -1143,8 +1471,6 @@ namespace BalanceAndVarietyRework
                 field.SetValue(value);
         }
 
-
-
         private static void EnableMissileBay(WeaponMount mount)
         {
             if (mount == null)
@@ -1153,6 +1479,7 @@ namespace BalanceAndVarietyRework
             Traverse traverse = Traverse.Create(mount);
 
             Traverse field = traverse.Field("missileBay");
+
             if (field.FieldExists())
             {
                 field.SetValue(true);
@@ -1160,13 +1487,12 @@ namespace BalanceAndVarietyRework
             }
 
             Traverse property = traverse.Property("missileBay");
+
             if (property.PropertyExists())
             {
                 property.SetValue(true);
             }
         }
-
-
 
         private static void SetNetworkLookupIndex(Traverse traverseMount, string networkKey)
         {
@@ -1175,15 +1501,15 @@ namespace BalanceAndVarietyRework
             int customNetworkId = GetStablePositiveHash(networkKey);
 
             Traverse backingField = traverseMount.Field("<INetworkDefinition.LookupIndex>k__BackingField");
+
             if (backingField.FieldExists())
                 backingField.SetValue(customNetworkId);
 
             Traverse interfaceProperty = traverseMount.Property("INetworkDefinition.LookupIndex");
+
             if (interfaceProperty.PropertyExists())
                 interfaceProperty.SetValue(customNetworkId);
         }
-
-
 
         private static int GetStablePositiveHash(string text)
         {
@@ -1204,8 +1530,6 @@ namespace BalanceAndVarietyRework
             }
         }
 
-
-
         private static GameObject FindOriginalSamRadar2Prefab()
         {
             GameObject[] allGameObjects = Resources.FindObjectsOfTypeAll<GameObject>();
@@ -1216,8 +1540,6 @@ namespace BalanceAndVarietyRework
                 go.transform.parent == null);
         }
 
-
-
         private static void SwapMissileVisualsAndCollider(Transform missileChild, GameObject originalSamPrefab, bool addColliderIfMissing, bool copyColliderTrigger)
         {
             if (missileChild == null || originalSamPrefab == null)
@@ -1226,12 +1548,14 @@ namespace BalanceAndVarietyRework
             // Swap MeshFilter (the 3D geometry).
             MeshFilter origMf = originalSamPrefab.GetComponent<MeshFilter>();
             MeshFilter newMf = missileChild.GetComponent<MeshFilter>();
+
             if (origMf != null && newMf != null)
                 newMf.sharedMesh = origMf.sharedMesh;
 
             // Swap MeshRenderer (textures/materials).
             MeshRenderer origMr = originalSamPrefab.GetComponent<MeshRenderer>();
             MeshRenderer newMr = missileChild.GetComponent<MeshRenderer>();
+
             if (origMr != null && newMr != null)
                 newMr.sharedMaterials = origMr.sharedMaterials;
 
@@ -1239,15 +1563,18 @@ namespace BalanceAndVarietyRework
             // If left enabled, LODs can continue rendering the original missile meshes at some distances
             // because internal renderer references have not been updated.
             LODGroup newLod = missileChild.GetComponent<LODGroup>();
+
             if (newLod != null)
                 newLod.enabled = false;
 
             // Swap CapsuleCollider (physical hitbox).
             CapsuleCollider origCol = originalSamPrefab.GetComponent<CapsuleCollider>();
+
             if (origCol == null)
                 return;
 
             CapsuleCollider newCol = missileChild.GetComponent<CapsuleCollider>();
+
             if (newCol == null)
             {
                 if (!addColliderIfMissing)
@@ -1268,14 +1595,13 @@ namespace BalanceAndVarietyRework
                 newCol.isTrigger = origCol.isTrigger;
         }
 
-
-
         private static void AssignWeaponInfo(GameObject prefabRoot, string infoAssetName, string componentName)
         {
             if (prefabRoot == null)
                 return;
 
             UnityEngine.Object infoAsset = GetCachedInfoAsset(infoAssetName);
+
             if (infoAsset == null)
             {
                 Debug.LogWarning($"[CustomWeaponsReusedAssets] Could not find info asset '{infoAssetName}'.");
@@ -1288,12 +1614,14 @@ namespace BalanceAndVarietyRework
                     continue;
 
                 Type type = comp.GetType();
+
                 if (type == null || type.Name != componentName)
                     continue;
 
                 Traverse traverseComp = Traverse.Create(comp);
 
                 Traverse infoField = traverseComp.Field("info");
+
                 if (infoField.FieldExists())
                 {
                     infoField.SetValue(infoAsset);
@@ -1301,12 +1629,11 @@ namespace BalanceAndVarietyRework
                 }
 
                 Traverse infoProperty = traverseComp.Property("info");
+
                 if (infoProperty.PropertyExists())
                     infoProperty.SetValue(infoAsset);
             }
         }
-
-
 
         private static UnityEngine.Object GetCachedInfoAsset(string assetName)
         {
@@ -1314,6 +1641,7 @@ namespace BalanceAndVarietyRework
                 return null;
 
             UnityEngine.Object cached;
+
             if (infoAssetCache.TryGetValue(assetName, out cached))
                 return cached;
 
@@ -1321,10 +1649,9 @@ namespace BalanceAndVarietyRework
                 .FirstOrDefault(o => o != null && o.name == assetName);
 
             infoAssetCache[assetName] = asset;
+
             return asset;
         }
-
-
 
         private static void SetMountedMissileRailDelay(GameObject prefabRoot, float delay)
         {
@@ -1342,6 +1669,7 @@ namespace BalanceAndVarietyRework
                     continue;
 
                 Type type = component.GetType();
+
                 if (type == null || type.Name != "MountedMissile")
                     continue;
 
@@ -1359,13 +1687,12 @@ namespace BalanceAndVarietyRework
             }
         }
 
-
-
         private static bool TrySetRailDelay(object target, float delay)
         {
             Traverse traverse = Traverse.Create(target);
 
             Traverse field = traverse.Field("railDelay");
+
             if (field.FieldExists())
             {
                 field.SetValue(delay);
@@ -1373,6 +1700,7 @@ namespace BalanceAndVarietyRework
             }
 
             Traverse property = traverse.Property("railDelay");
+
             if (property.PropertyExists())
             {
                 property.SetValue(delay);
@@ -1382,21 +1710,17 @@ namespace BalanceAndVarietyRework
             return false;
         }
 
-
-
         // ================================================================================================
         // CLONED POD LIVERY FIX / COLORABLE MOUNT MERGE
         // Ensures duplicated pod renderers are included in the root ColorableMount so liveries apply correctly.
         // ================================================================================================
-
-
-
         private static void MirrorColorableMountToClonedPod(GameObject prefabRoot, GameObject sourcePod, GameObject clonedPod)
         {
             if (prefabRoot == null || sourcePod == null || clonedPod == null)
                 return;
 
             ColorableMount rootMount = EnsureRootColorableMount(prefabRoot);
+
             if (rootMount == null)
             {
                 Debug.LogWarning($"[CustomWeaponsReusedAssets] No ColorableMount found on {prefabRoot.name}. Cloned pod livery fix skipped.");
@@ -1404,6 +1728,7 @@ namespace BalanceAndVarietyRework
             }
 
             Traverse rootTraverse = Traverse.Create(rootMount);
+
             Traverse colorField = rootTraverse.Field("colorableRenderers");
             Traverse skinField = rootTraverse.Field("skinnableRenderers");
 
@@ -1425,22 +1750,23 @@ namespace BalanceAndVarietyRework
             Debug.Log($"[CustomWeaponsReusedAssets] Updated ColorableMount on {prefabRoot.name}. Colorable renderers: {colorList.Count}, Skinnable renderers: {skinList.Count}.");
         }
 
-
-
         private static ColorableMount EnsureRootColorableMount(GameObject prefabRoot)
         {
             if (prefabRoot == null)
                 return null;
 
             ColorableMount[] existingMounts = prefabRoot.GetComponentsInChildren<ColorableMount>(true);
+
             if (existingMounts == null || existingMounts.Length == 0)
                 return null;
 
             ColorableMount rootMount = prefabRoot.GetComponent<ColorableMount>();
+
             if (rootMount == null)
                 rootMount = prefabRoot.AddComponent<ColorableMount>();
 
             Traverse rootTraverse = Traverse.Create(rootMount);
+
             Traverse rootColorField = rootTraverse.Field("colorableRenderers");
             Traverse rootSkinField = rootTraverse.Field("skinnableRenderers");
 
@@ -1458,17 +1784,21 @@ namespace BalanceAndVarietyRework
                 Traverse mountTraverse = Traverse.Create(mount);
 
                 Traverse childColorField = mountTraverse.Field("colorableRenderers");
+
                 if (childColorField.FieldExists())
                 {
                     Renderer[] childColors = childColorField.GetValue<Renderer[]>() ?? new Renderer[0];
+
                     foreach (Renderer r in childColors)
                         AddUniqueRenderer(colorList, r);
                 }
 
                 Traverse childSkinField = mountTraverse.Field("skinnableRenderers");
+
                 if (childSkinField.FieldExists())
                 {
                     Renderer[] childSkins = childSkinField.GetValue<Renderer[]>() ?? new Renderer[0];
+
                     foreach (Renderer r in childSkins)
                         AddUniqueRenderer(skinList, r);
                 }
@@ -1484,8 +1814,6 @@ namespace BalanceAndVarietyRework
             return rootMount;
         }
 
-
-
         private static void AddMirroredRenderers(List<Renderer> renderers, Transform sourceRoot, Transform clonedRoot)
         {
             if (renderers == null || sourceRoot == null || clonedRoot == null)
@@ -1499,11 +1827,10 @@ namespace BalanceAndVarietyRework
                     continue;
 
                 Renderer mirrored = FindMirroredRenderer(original, sourceRoot, clonedRoot);
+
                 AddUniqueRenderer(renderers, mirrored);
             }
         }
-
-
 
         private static Renderer FindMirroredRenderer(Renderer original, Transform sourceRoot, Transform clonedRoot)
         {
@@ -1511,10 +1838,12 @@ namespace BalanceAndVarietyRework
                 return null;
 
             Transform targetTransform = FindMirroredTransform(original.transform, sourceRoot, clonedRoot);
+
             if (targetTransform == null)
                 return null;
 
             Renderer[] originalRenderers = original.GetComponents<Renderer>();
+
             int rendererIndex = -1;
 
             for (int i = 0; i < originalRenderers.Length; i++)
@@ -1527,6 +1856,7 @@ namespace BalanceAndVarietyRework
             }
 
             Renderer[] clonedRenderers = targetTransform.GetComponents<Renderer>();
+
             if (clonedRenderers.Length == 0)
                 return null;
 
@@ -1535,8 +1865,6 @@ namespace BalanceAndVarietyRework
 
             return clonedRenderers[0];
         }
-
-
 
         private static Transform FindMirroredTransform(Transform original, Transform sourceRoot, Transform clonedRoot)
         {
@@ -1550,6 +1878,7 @@ namespace BalanceAndVarietyRework
                 return clonedRoot;
 
             List<int> siblingPath = new List<int>();
+
             Transform current = original;
 
             while (current != null && current != sourceRoot)
@@ -1571,8 +1900,6 @@ namespace BalanceAndVarietyRework
             return target;
         }
 
-
-
         private static bool IsUnderTransform(Transform child, Transform root)
         {
             if (child == null || root == null)
@@ -1589,8 +1916,6 @@ namespace BalanceAndVarietyRework
             return false;
         }
 
-
-
         private static void AddUniqueRenderer(List<Renderer> list, Renderer renderer)
         {
             if (renderer == null)
@@ -1605,21 +1930,328 @@ namespace BalanceAndVarietyRework
         }
     }
 
-
-
     // ====================================================================================================
-    // SHARED HARDPOINT INJECTION
-    // Common helper for adding WeaponMounts to aircraft hardpoint sets.
-    // This removes repeated Resource scans and duplicated hardpoint validation logic from every patch.
+    // FEATURE RUNTIME MANAGER
+    // Central authority for practical feature application.
+    //
+    // Manual ConfigManager changes:
+    //   - update current hash/seed display
+    //   - do NOT apply practical changes
+    //
+    // Network host seed:
+    //   - imports config values
+    //   - calls SyncFromNetwork()
+    //   - applies/unapplies features so the client matches the host's applied state
     // ====================================================================================================
-
-
-
-    internal static class HardpointInjection
+    internal static class FeatureRuntimeManager
     {
-        // The injection only occurs if ALL requested hardpoint set indices exist on the target WeaponManager.
-        // This preserves the original behavior of checks like "hardpointSets.Length > 3" for sets 2 and 3.
-        public static bool InjectWeaponMount(
+        private sealed class FeatureRegistration
+        {
+            public string Id;
+            public int Order;
+            public Type Type;
+            public Func<bool> IsEnabled;
+            public Action Apply;
+            public Action Unapply;
+            public bool Applied;
+        }
+
+        private static readonly Dictionary<string, FeatureRegistration> features =
+            new Dictionary<string, FeatureRegistration>(StringComparer.Ordinal);
+
+        private static readonly List<FeatureRegistration> orderedFeatures =
+            new List<FeatureRegistration>();
+
+        private static bool initialized = false;
+        private static bool initialObjectSyncDone = false;
+        private static bool networkSyncDone = false;
+        private static bool isSyncing = false;
+
+        public static bool HasCompletedInitialObjectSync
+        {
+            get { return initialObjectSyncDone; }
+        }
+
+        public static bool HasCompletedNetworkSync
+        {
+            get { return networkSyncDone; }
+        }
+
+        public static void Initialize()
+        {
+            if (initialized)
+                return;
+
+            initialized = true;
+
+            Type[] types;
+
+            try
+            {
+                types = Assembly.GetExecutingAssembly().GetTypes();
+            }
+            catch (ReflectionTypeLoadException ex)
+            {
+                types = ex.Types.Where(t => t != null).ToArray();
+            }
+
+            foreach (Type type in types)
+            {
+                if (type == null)
+                    continue;
+
+                BvrFeatureAttribute attr = type
+                    .GetCustomAttributes(typeof(BvrFeatureAttribute), false)
+                    .OfType<BvrFeatureAttribute>()
+                    .FirstOrDefault();
+
+                if (attr == null)
+                    continue;
+
+                if (features.ContainsKey(attr.Id))
+                {
+                    Debug.LogWarning($"[FeatureRuntimeManager] Duplicate feature ID '{attr.Id}' on type '{type.Name}'. Skipping.");
+                    continue;
+                }
+
+                FeatureRegistration reg = new FeatureRegistration
+                {
+                    Id = attr.Id,
+                    Order = attr.Order,
+                    Type = type
+                };
+
+                MethodInfo isEnabledMethod = type.GetMethod(
+                    "IsEnabled",
+                    BindingFlags.Public | BindingFlags.Static,
+                    null,
+                    Type.EmptyTypes,
+                    null);
+
+                if (isEnabledMethod != null && isEnabledMethod.ReturnType == typeof(bool))
+                {
+                    reg.IsEnabled = (Func<bool>)Delegate.CreateDelegate(typeof(Func<bool>), isEnabledMethod);
+                }
+                else if (!string.IsNullOrEmpty(attr.ToggleField))
+                {
+                    string toggleField = attr.ToggleField;
+                    reg.IsEnabled = () => GetPluginToggle(toggleField);
+                }
+                else
+                {
+                    reg.IsEnabled = () => false;
+                }
+
+                reg.Apply = CreateAction(type, "Apply");
+                reg.Unapply = CreateAction(type, "Unapply");
+
+                if (reg.Apply == null || reg.Unapply == null)
+                {
+                    Debug.LogWarning($"[FeatureRuntimeManager] Feature '{attr.Id}' on type '{type.Name}' must implement public static void Apply() and public static void Unapply(). Skipping.");
+                    continue;
+                }
+
+                features.Add(attr.Id, reg);
+            }
+
+            orderedFeatures.AddRange(
+                features.Values
+                    .OrderBy(f => f.Order)
+                    .ThenBy(f => f.Id, StringComparer.Ordinal));
+
+            Debug.Log($"[FeatureRuntimeManager] Registered {orderedFeatures.Count} runtime feature(s).");
+        }
+
+        public static void OnWeaponManagerAwake()
+        {
+            // First practical application uses local config unless a network seed has already synchronized.
+            if (initialObjectSyncDone)
+                return;
+
+            initialObjectSyncDone = true;
+
+            SyncAll("initial object availability", false);
+
+            if (Plugin.Instance != null)
+                Plugin.Instance.MarkAppliedConfigState();
+        }
+
+        public static void SyncFromNetwork()
+        {
+            networkSyncDone = true;
+
+            // Force-clean disabled features during network sync so host-off/client-on edge cases can be removed.
+            SyncAll("network host seed", true);
+
+            if (Plugin.Instance != null)
+                Plugin.Instance.MarkAppliedConfigState();
+        }
+
+        public static bool IsFeatureEnabled(string id)
+        {
+            FeatureRegistration reg;
+
+            if (!features.TryGetValue(id, out reg))
+                return false;
+
+            return reg.Applied;
+        }
+
+        private static void SyncAll(string source, bool forceCleanDisabled)
+        {
+            if (!initialized || isSyncing)
+                return;
+
+            isSyncing = true;
+
+            try
+            {
+                List<FeatureRegistration> disabled = new List<FeatureRegistration>();
+                List<FeatureRegistration> enabled = new List<FeatureRegistration>();
+
+                foreach (FeatureRegistration reg in orderedFeatures)
+                {
+                    bool desired = SafeIsEnabled(reg);
+
+                    if (desired)
+                        enabled.Add(reg);
+                    else
+                        disabled.Add(reg);
+                }
+
+                // Unapply disabled features in reverse order.
+                for (int i = disabled.Count - 1; i >= 0; i--)
+                {
+                    FeatureRegistration reg = disabled[i];
+
+                    if (reg.Applied || forceCleanDisabled)
+                        SafeUnapply(reg);
+                }
+
+                // Apply enabled features in forward order.
+                // Always call Apply so value-only changes can refresh already-applied features.
+                foreach (FeatureRegistration reg in enabled)
+                {
+                    SafeApply(reg);
+                }
+
+                Debug.Log($"[FeatureRuntimeManager] Feature runtime sync complete ({source}).");
+            }
+            finally
+            {
+                isSyncing = false;
+            }
+        }
+
+        private static bool GetPluginToggle(string fieldName)
+        {
+            if (string.IsNullOrEmpty(fieldName))
+                return false;
+
+            FieldInfo field = typeof(Plugin).GetField(
+                fieldName,
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+
+            if (field == null)
+                return false;
+
+            object value = field.GetValue(null);
+
+            ConfigEntry<bool> boolEntry = value as ConfigEntry<bool>;
+
+            if (boolEntry != null)
+                return boolEntry.Value;
+
+            return false;
+        }
+
+        private static Action CreateAction(Type type, string methodName)
+        {
+            MethodInfo method = type.GetMethod(
+                methodName,
+                BindingFlags.Public | BindingFlags.Static,
+                null,
+                Type.EmptyTypes,
+                null);
+
+            if (method == null)
+                return null;
+
+            return (Action)Delegate.CreateDelegate(typeof(Action), method);
+        }
+
+        private static bool SafeIsEnabled(FeatureRegistration reg)
+        {
+            try
+            {
+                return reg.IsEnabled();
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[FeatureRuntimeManager] Feature '{reg.Id}' failed IsEnabled check: {ex.Message}");
+                return false;
+            }
+        }
+
+        private static void SafeApply(FeatureRegistration reg)
+        {
+            try
+            {
+                reg.Apply();
+                reg.Applied = true;
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[FeatureRuntimeManager] Feature '{reg.Id}' failed Apply: {ex.Message}");
+            }
+        }
+
+        private static void SafeUnapply(FeatureRegistration reg)
+        {
+            try
+            {
+                reg.Unapply();
+                reg.Applied = false;
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[FeatureRuntimeManager] Feature '{reg.Id}' failed Unapply: {ex.Message}");
+            }
+        }
+    }
+
+    // ====================================================================================================
+    // FEATURE RUNTIME TRIGGER
+    // Central WeaponManager.Awake hook that starts the first local feature synchronization.
+    // ====================================================================================================
+    [HarmonyPatch(typeof(WeaponManager), "Awake")]
+    public static class FeatureRuntimeTriggerPatch
+    {
+        public static void Prefix()
+        {
+            FeatureRuntimeManager.OnWeaponManagerAwake();
+        }
+    }
+
+    // ====================================================================================================
+    // FEATURE HARDPOINT INJECTION
+    // Reversible hardpoint injection system.
+    // Each feature records what it injected so the handshake system can remove it later if required.
+    // ====================================================================================================
+    internal static class FeatureHardpointInjection
+    {
+        private sealed class InjectionRecord
+        {
+            public WeaponManager manager;
+            public int setIndex;
+            public WeaponMount mount;
+        }
+
+        private static readonly Dictionary<string, List<InjectionRecord>> injectedRecords =
+            new Dictionary<string, List<InjectionRecord>>(StringComparer.Ordinal);
+
+        public static bool Inject(
+            string featureId,
             string rootNameContains,
             WeaponMount mount,
             int[] hardpointSets,
@@ -1628,8 +2260,14 @@ namespace BalanceAndVarietyRework
             string hardpointDescription,
             string excludeRootContains)
         {
-            if (string.IsNullOrEmpty(rootNameContains) || mount == null || hardpointSets == null || hardpointSets.Length == 0)
+            if (string.IsNullOrEmpty(featureId) ||
+                string.IsNullOrEmpty(rootNameContains) ||
+                mount == null ||
+                hardpointSets == null ||
+                hardpointSets.Length == 0)
+            {
                 return false;
+            }
 
             bool injectedAny = false;
             int maxRequestedSet = hardpointSets.Max();
@@ -1642,6 +2280,7 @@ namespace BalanceAndVarietyRework
                     continue;
 
                 string rootName = wm.transform.root.name;
+
                 if (!rootName.Contains(rootNameContains))
                     continue;
 
@@ -1659,12 +2298,14 @@ namespace BalanceAndVarietyRework
                         continue;
 
                     var hardpointSet = wm.hardpointSets[setIndex];
+
                     if (hardpointSet == null || hardpointSet.weaponOptions == null)
                         continue;
 
                     if (!hardpointSet.weaponOptions.Contains(mount))
                     {
                         hardpointSet.weaponOptions.Add(mount);
+                        AddRecord(featureId, wm, setIndex, mount);
                         updated = true;
                     }
                 }
@@ -1678,197 +2319,122 @@ namespace BalanceAndVarietyRework
 
             return injectedAny;
         }
-    }
 
-
-
-    // ====================================================================================================
-    // MISSILE BALANCE CHANGES
-    // Config Category: Missile Balance Changes
-    // ====================================================================================================
-
-
-
-    // ====================================================================================================
-    // IR MISSILES BUFF
-    // ====================================================================================================
-
-
-
-    [HarmonyPatch(typeof(WeaponManager), "Awake")]
-    public static class StatsPatch
-    {
-        private static bool hasSweptStats = false;
-
-        public static void Prefix()
+        public static void Remove(string featureId, string logTag)
         {
-            if (!Plugin.EnableIRMissilesBuff.Value)
+            List<InjectionRecord> records;
+
+            if (!injectedRecords.TryGetValue(featureId, out records))
                 return;
 
-            if (hasSweptStats)
+            if (records.Count == 0)
                 return;
 
-            FlareEjector[] allFlares = Resources.FindObjectsOfTypeAll<FlareEjector>();
-            foreach (FlareEjector flare in allFlares)
+            int removedCount = 0;
+
+            foreach (InjectionRecord record in records)
             {
-                ApplyFlareMultiplier(flare);
-            }
-
-            IRSeeker[] allSeekers = Resources.FindObjectsOfTypeAll<IRSeeker>();
-            foreach (IRSeeker seeker in allSeekers)
-            {
-                ApplySeekerMultiplier(seeker);
-            }
-
-            hasSweptStats = true;
-            Debug.Log("[IRMissileBuff] Successfully swept and multiplied all FlareEjector and IRSeeker blueprints!");
-        }
-
-        private static void ApplyFlareMultiplier(FlareEjector flare)
-        {
-            if (flare == null || flare.GetComponent<ModifiedStatsFlag>() != null)
-                return;
-
-            Traverse traverse = Traverse.Create(flare);
-            Traverse maxAmmoField = traverse.Field("maxAmmo");
-            Traverse ammoField = traverse.Field("ammo");
-
-            if (!maxAmmoField.FieldExists() || !ammoField.FieldExists())
-                return;
-
-            int currentMax = maxAmmoField.GetValue<int>();
-            int currentAmmo = ammoField.GetValue<int>();
-            float multiplier = Plugin.FlareCountMultiplier.Value;
-
-            maxAmmoField.SetValue(Mathf.RoundToInt(currentMax * multiplier));
-            ammoField.SetValue(Mathf.RoundToInt(currentAmmo * multiplier));
-
-            flare.gameObject.AddComponent<ModifiedStatsFlag>();
-        }
-
-        private static void ApplySeekerMultiplier(IRSeeker seeker)
-        {
-            if (seeker == null || seeker.GetComponent<ModifiedStatsFlag>() != null)
-                return;
-
-            Traverse traverse = Traverse.Create(seeker);
-            Traverse rejectionField = traverse.Field("flareRejection");
-
-            if (!rejectionField.FieldExists())
-                return;
-
-            float currentRejection = rejectionField.GetValue<float>();
-            float multiplier = Plugin.FlareRejectionMultiplier.Value;
-
-            rejectionField.SetValue(currentRejection * multiplier);
-            seeker.gameObject.AddComponent<ModifiedStatsFlag>();
-        }
-    }
-
-
-
-    // ====================================================================================================
-    // SARH LOCK PERSISTENCE
-    // ====================================================================================================
-
-
-
-    [HarmonyPatch(typeof(WeaponManager), "Awake")]
-    public static class SARHLockPersistencePatch
-    {
-        private static bool hasPatchedR9LockPersistence = false;
-        private static bool hasPatchedRAM45LockPersistence = false;
-
-        public static void Prefix()
-        {
-            if (!Plugin.EnableR9LockPersistenceBuff.Value && !Plugin.EnableRAM45LockPersistenceBuff.Value)
-                return;
-
-            if (Plugin.EnableR9LockPersistenceBuff.Value && !hasPatchedR9LockPersistence)
-            {
-                hasPatchedR9LockPersistence = ApplySARHLockPersistence("SAM_Radar2", Plugin.R9LockPersistenceValue.Value, "R9LockPersistence");
-            }
-
-            if (Plugin.EnableRAM45LockPersistenceBuff.Value && !hasPatchedRAM45LockPersistence)
-            {
-                hasPatchedRAM45LockPersistence = ApplySARHLockPersistence("SAM_Radar1", Plugin.RAM45LockPersistenceValue.Value, "RAM45LockPersistence");
-            }
-        }
-
-        private static bool ApplySARHLockPersistence(string targetName, float lockPersistence, string logTag)
-        {
-            bool success = false;
-
-            // Searching directly for SARHSeeker components is faster than scanning every GameObject and every component.
-            SARHSeeker[] seekers = Resources.FindObjectsOfTypeAll<SARHSeeker>();
-
-            foreach (SARHSeeker seeker in seekers)
-            {
-                if (seeker == null)
+                if (record == null)
                     continue;
 
-                // Handles both prefab assets and scene instances.
-                if (!ObjectNameUtility.IsUnderNamedObject(seeker.gameObject, targetName))
+                if (record.manager == null || record.mount == null)
                     continue;
 
-                if (seeker.GetComponent<ModifiedStatsFlag>() != null)
+                if (record.manager.hardpointSets == null)
+                    continue;
+
+                if (record.setIndex < 0 || record.setIndex >= record.manager.hardpointSets.Length)
+                    continue;
+
+                var hardpointSet = record.manager.hardpointSets[record.setIndex];
+
+                if (hardpointSet == null || hardpointSet.weaponOptions == null)
+                    continue;
+
+                if (hardpointSet.weaponOptions.Contains(record.mount))
                 {
-                    success = true;
-                    continue;
-                }
-
-                if (TrySetLockPersistence(seeker, lockPersistence))
-                {
-                    seeker.gameObject.AddComponent<ModifiedStatsFlag>();
-                    success = true;
-                    Debug.Log($"[{logTag}] Successfully set lockPersistence={lockPersistence} on {seeker.gameObject.name}.");
+                    hardpointSet.weaponOptions.Remove(record.mount);
+                    removedCount++;
                 }
             }
 
-            if (!success)
-            {
-                Debug.LogWarning($"[{logTag}] Could not find SARHSeeker.lockPersistence on {targetName}.");
-            }
-            else
-            {
-                Debug.Log($"[{logTag}] Master Prefab sweep complete!");
-            }
+            records.Clear();
 
-            return success;
+            if (removedCount > 0)
+            {
+                Debug.Log($"[{logTag}] Removed {removedCount} injected hardpoint option(s).");
+            }
         }
 
-        private static bool TrySetLockPersistence(object target, float value)
+        private static void AddRecord(string featureId, WeaponManager manager, int setIndex, WeaponMount mount)
         {
-            Traverse traverse = Traverse.Create(target);
+            List<InjectionRecord> records;
 
-            // Try field first.
-            Traverse field = traverse.Field("lockPersistence");
-            if (field.FieldExists())
+            if (!injectedRecords.TryGetValue(featureId, out records))
             {
-                field.SetValue(value);
-                return true;
+                records = new List<InjectionRecord>();
+                injectedRecords[featureId] = records;
             }
 
-            // Fallback if lockPersistence is exposed as a property.
-            Traverse property = traverse.Property("lockPersistence");
-            if (property.PropertyExists())
+            records.Add(new InjectionRecord
             {
-                property.SetValue(value);
-                return true;
-            }
-
-            return false;
+                manager = manager,
+                setIndex = setIndex,
+                mount = mount
+            });
         }
     }
 
+    // ====================================================================================================
+    // HARDPOINT FEATURE HELPER
+    // Small helper to keep individual hardpoint feature classes short and consistent.
+    // ====================================================================================================
+    internal static class HardpointFeatureHelper
+    {
+        public static void Apply(
+            string featureId,
+            Func<WeaponMount> mountFactory,
+            string rootContains,
+            int[] hardpointSets,
+            string logTag,
+            string weaponDescription,
+            string hardpointDescription,
+            string excludeRootContains = null)
+        {
+            if (mountFactory == null)
+                return;
 
+            WeaponMount mount = mountFactory();
+
+            if (mount == null)
+                return;
+
+            FeatureHardpointInjection.Inject(
+                featureId,
+                rootContains,
+                mount,
+                hardpointSets,
+                logTag,
+                weaponDescription,
+                hardpointDescription,
+                excludeRootContains);
+        }
+
+        public static void Unapply(string featureId, string logTag)
+        {
+            FeatureHardpointInjection.Remove(featureId, logTag);
+        }
+
+        public static WeaponMount GetExistingMount(string jsonKey)
+        {
+            return Resources.FindObjectsOfTypeAll<WeaponMount>()
+                .FirstOrDefault(m => m != null && m.jsonKey == jsonKey);
+        }
+    }
 
     // ====================================================================================================
     // SARH RELOCK
     // ====================================================================================================
-
-
-
     public class SARHRelockController : MonoBehaviour
     {
         private SARHSeeker seeker;
@@ -1927,10 +2493,12 @@ namespace BalanceAndVarietyRework
                 return null;
 
             Traverse field = seekerTraverse.Field(memberName);
+
             if (field.FieldExists())
                 return field;
 
             Traverse property = seekerTraverse.Property(memberName);
+
             if (property.PropertyExists())
                 return property;
 
@@ -2017,6 +2585,7 @@ namespace BalanceAndVarietyRework
             DecayJam(Mathf.Max(Time.deltaTime, 1f));
 
             Unit targetUnit = GetFieldValue<Unit>(targetUnitField);
+
             if (targetUnit == null || targetUnit.disabled)
             {
                 waitingForRelock = false;
@@ -2024,6 +2593,7 @@ namespace BalanceAndVarietyRework
             }
 
             Transform newTargetTransform = targetUnit.GetRandomPart();
+
             if (newTargetTransform == null)
             {
                 if (CanAttemptRelock())
@@ -2043,6 +2613,7 @@ namespace BalanceAndVarietyRework
             SetFieldValue(lastTrackingCheckField, 0f);
 
             TryResubscribeJamEvent();
+
             waitingForRelock = false;
         }
 
@@ -2059,6 +2630,7 @@ namespace BalanceAndVarietyRework
             }
 
             float tolerance = GetFieldValue<float>(jamToleranceField);
+
             jam -= Mathf.Max(jam, 0.2f) * Mathf.Max(tolerance, 0.1f) * deltaTime;
 
             SetFieldValue(jamAccumulationField, Mathf.Clamp01(jam));
@@ -2096,10 +2668,12 @@ namespace BalanceAndVarietyRework
             try
             {
                 Missile missile = GetMissile();
+
                 if (missile == null || seeker == null)
                     return;
 
                 MethodInfo method = AccessTools.Method(typeof(SARHSeeker), "SARHSeeker_OnJam", new Type[] { typeof(Unit.JamEventArgs) });
+
                 if (method == null)
                     return;
 
@@ -2111,13 +2685,16 @@ namespace BalanceAndVarietyRework
                 if (eventInfo != null)
                 {
                     Delegate handler = Delegate.CreateDelegate(eventInfo.EventHandlerType, seeker, method);
+
                     eventInfo.RemoveEventHandler(missile, handler);
                     eventInfo.AddEventHandler(missile, handler);
+
                     return;
                 }
 
                 // Fallback: If 'onJam' is exposed as a public Delegate field instead of a C# event.
                 FieldInfo field = AccessTools.Field(missile.GetType(), "onJam");
+
                 if (field != null && typeof(Delegate).IsAssignableFrom(field.FieldType))
                 {
                     Delegate currentDelegate = field.GetValue(missile) as Delegate;
@@ -2137,8 +2714,179 @@ namespace BalanceAndVarietyRework
         }
     }
 
+    // ====================================================================================================
+    // SARH RELOCK HELPER
+    // ====================================================================================================
+    internal static class SARHRelockHelper
+    {
+        private sealed class RelockSettings
+        {
+            public float delay;
+            public int attempts;
+        }
 
+        private static readonly Dictionary<string, RelockSettings> appliedSettings =
+            new Dictionary<string, RelockSettings>(StringComparer.Ordinal);
 
+        public static void Apply(string featureId, string targetName, float delay, int attempts, string logTag)
+        {
+            appliedSettings[featureId] = new RelockSettings
+            {
+                delay = delay,
+                attempts = attempts
+            };
+
+            int count = 0;
+
+            SARHSeeker[] seekers = Resources.FindObjectsOfTypeAll<SARHSeeker>();
+
+            foreach (SARHSeeker seeker in seekers)
+            {
+                if (seeker == null || seeker.gameObject == null)
+                    continue;
+
+                // Only attach controllers to active scene objects.
+                // Future missiles are handled by SARHRelockPatch.
+                if (!seeker.gameObject.activeInHierarchy)
+                    continue;
+
+                if (!ObjectNameUtility.IsUnderNamedObject(seeker.gameObject, targetName))
+                    continue;
+
+                Setup(seeker, delay, attempts);
+                count++;
+            }
+
+            if (count > 0)
+                Debug.Log($"[{logTag}] Applied SARH relock controller(s) to {count} active seeker(s) under {targetName}.");
+        }
+
+        public static void Unapply(string featureId, string targetName, string logTag)
+        {
+            appliedSettings.Remove(featureId);
+
+            int count = 0;
+
+            SARHSeeker[] seekers = Resources.FindObjectsOfTypeAll<SARHSeeker>();
+
+            foreach (SARHSeeker seeker in seekers)
+            {
+                if (seeker == null || seeker.gameObject == null)
+                    continue;
+
+                if (!ObjectNameUtility.IsUnderNamedObject(seeker.gameObject, targetName))
+                    continue;
+
+                SARHRelockController controller = seeker.GetComponent<SARHRelockController>();
+
+                if (controller != null)
+                {
+                    BVRBackupUtility.DestroyComponent(controller);
+                    count++;
+                }
+            }
+
+            if (count > 0)
+                Debug.Log($"[{logTag}] Removed SARH relock controller(s) from {count} seeker(s) under {targetName}.");
+        }
+
+        public static void Setup(SARHSeeker seeker, float delay, int attempts)
+        {
+            if (seeker == null)
+                return;
+
+            SARHRelockController controller = seeker.GetComponent<SARHRelockController>();
+
+            if (controller == null)
+                controller = seeker.gameObject.AddComponent<SARHRelockController>();
+
+            controller.Setup(seeker, delay, attempts);
+        }
+
+        public static bool TrySetupIfFeatureEnabled(SARHSeeker seeker)
+        {
+            if (seeker == null)
+                return false;
+
+            string rootName = ObjectNameUtility.GetCleanRootName(seeker.gameObject);
+
+            RelockSettings settings;
+
+            if (rootName.Contains("SAM_Radar2") &&
+                FeatureRuntimeManager.IsFeatureEnabled("R9SARHRelock") &&
+                appliedSettings.TryGetValue("R9SARHRelock", out settings))
+            {
+                Setup(seeker, settings.delay, settings.attempts);
+                return true;
+            }
+
+            if (rootName.Contains("SAM_Radar1") &&
+                FeatureRuntimeManager.IsFeatureEnabled("RAM45SARHRelock") &&
+                appliedSettings.TryGetValue("RAM45SARHRelock", out settings))
+            {
+                Setup(seeker, settings.delay, settings.attempts);
+                return true;
+            }
+
+            return false;
+        }
+    }
+
+    // ====================================================================================================
+    // SARH RELOCK FEATURES
+    // ====================================================================================================
+    [BvrFeature("R9SARHRelock", ToggleField = nameof(Plugin.EnableR9SARHRelock), Order = 30)]
+    public static class R9SARHRelockFeature
+    {
+        private const string FeatureId = "R9SARHRelock";
+
+        public static void Apply()
+        {
+            SARHRelockHelper.Apply(
+                FeatureId,
+                "SAM_Radar2",
+                Mathf.Max(0f, Plugin.R9SARHRelockDelay.Value),
+                Mathf.Max(0, Plugin.R9SARHRelockAttempts.Value),
+                FeatureId);
+        }
+
+        public static void Unapply()
+        {
+            SARHRelockHelper.Unapply(
+                FeatureId,
+                "SAM_Radar2",
+                FeatureId);
+        }
+    }
+
+    [BvrFeature("RAM45SARHRelock", ToggleField = nameof(Plugin.EnableRAM45SARHRelock), Order = 31)]
+    public static class RAM45SARHRelockFeature
+    {
+        private const string FeatureId = "RAM45SARHRelock";
+
+        public static void Apply()
+        {
+            SARHRelockHelper.Apply(
+                FeatureId,
+                "SAM_Radar1",
+                Mathf.Max(0f, Plugin.RAM45SARHRelockDelay.Value),
+                Mathf.Max(0, Plugin.RAM45SARHRelockAttempts.Value),
+                FeatureId);
+        }
+
+        public static void Unapply()
+        {
+            SARHRelockHelper.Unapply(
+                FeatureId,
+                "SAM_Radar1",
+                FeatureId);
+        }
+    }
+
+    // ====================================================================================================
+    // SARH RELOCK PATCH
+    // Still required for newly initialized missiles after the feature has been applied.
+    // ====================================================================================================
     [HarmonyPatch(typeof(SARHSeeker), "Initialize", new Type[] { typeof(Unit), typeof(GlobalPosition) })]
     public static class SARHRelockPatch
     {
@@ -2147,37 +2895,268 @@ namespace BalanceAndVarietyRework
             if (__instance == null || target == null)
                 return;
 
-            if (!TryGetRelockSettings(__instance, out float delay, out int attempts))
-                return;
+            SARHRelockHelper.TrySetupIfFeatureEnabled(__instance);
+        }
+    }
 
-            SARHRelockController controller = __instance.GetComponent<SARHRelockController>();
-            if (controller == null)
-                controller = __instance.gameObject.AddComponent<SARHRelockController>();
+    // ====================================================================================================
+    // IR MISSILES BUFF FEATURE
+    // ====================================================================================================
+    [BvrFeature("IRMissilesBuff", ToggleField = nameof(Plugin.EnableIRMissilesBuff), Order = 10)]
+    public static class IRMissilesBuffFeature
+    {
+        public static void Apply()
+        {
+            FlareEjector[] allFlares = Resources.FindObjectsOfTypeAll<FlareEjector>();
 
-            controller.Setup(__instance, delay, attempts);
+            foreach (FlareEjector flare in allFlares)
+            {
+                ApplyFlare(flare);
+            }
+
+            IRSeeker[] allSeekers = Resources.FindObjectsOfTypeAll<IRSeeker>();
+
+            foreach (IRSeeker seeker in allSeekers)
+            {
+                ApplySeeker(seeker);
+            }
+
+            Debug.Log("[IRMissileBuff] Feature applied.");
         }
 
-        private static bool TryGetRelockSettings(SARHSeeker seeker, out float delay, out int attempts)
+        public static void Unapply()
         {
-            delay = 0f;
-            attempts = 0;
+            FlareEjector[] allFlares = Resources.FindObjectsOfTypeAll<FlareEjector>();
 
-            if (seeker == null)
-                return false;
-
-            string rootName = ObjectNameUtility.GetCleanRootName(seeker.gameObject);
-
-            if (rootName.Contains("SAM_Radar2") && Plugin.EnableR9SARHRelock.Value)
+            foreach (FlareEjector flare in allFlares)
             {
-                delay = Mathf.Max(0f, Plugin.R9SARHRelockDelay.Value);
-                attempts = Mathf.Max(0, Plugin.R9SARHRelockAttempts.Value);
+                RestoreFlare(flare);
+            }
+
+            IRSeeker[] allSeekers = Resources.FindObjectsOfTypeAll<IRSeeker>();
+
+            foreach (IRSeeker seeker in allSeekers)
+            {
+                RestoreSeeker(seeker);
+            }
+
+            Debug.Log("[IRMissileBuff] Feature unapplied.");
+        }
+
+        private static void ApplyFlare(FlareEjector flare)
+        {
+            if (flare == null)
+                return;
+
+            Traverse traverse = Traverse.Create(flare);
+
+            Traverse maxAmmoField = traverse.Field("maxAmmo");
+            Traverse ammoField = traverse.Field("ammo");
+
+            if (!maxAmmoField.FieldExists() || !ammoField.FieldExists())
+                return;
+
+            BVRIntPairBackup backup = flare.GetComponent<BVRIntPairBackup>();
+
+            if (backup == null)
+            {
+                backup = flare.gameObject.AddComponent<BVRIntPairBackup>();
+                backup.value1 = maxAmmoField.GetValue<int>();
+                backup.value2 = ammoField.GetValue<int>();
+            }
+
+            float multiplier = Plugin.FlareCountMultiplier.Value;
+
+            maxAmmoField.SetValue(Mathf.RoundToInt(backup.value1 * multiplier));
+            ammoField.SetValue(Mathf.RoundToInt(backup.value2 * multiplier));
+        }
+
+        private static void RestoreFlare(FlareEjector flare)
+        {
+            if (flare == null)
+                return;
+
+            BVRIntPairBackup backup = flare.GetComponent<BVRIntPairBackup>();
+
+            if (backup == null)
+                return;
+
+            Traverse traverse = Traverse.Create(flare);
+
+            Traverse maxAmmoField = traverse.Field("maxAmmo");
+            Traverse ammoField = traverse.Field("ammo");
+
+            if (!maxAmmoField.FieldExists() || !ammoField.FieldExists())
+                return;
+
+            maxAmmoField.SetValue(backup.value1);
+            ammoField.SetValue(backup.value2);
+
+            BVRBackupUtility.DestroyComponent(backup);
+        }
+
+        private static void ApplySeeker(IRSeeker seeker)
+        {
+            if (seeker == null)
+                return;
+
+            Traverse traverse = Traverse.Create(seeker);
+
+            Traverse rejectionField = traverse.Field("flareRejection");
+
+            if (!rejectionField.FieldExists())
+                return;
+
+            BVRFloatBackup backup = seeker.GetComponent<BVRFloatBackup>();
+
+            if (backup == null)
+            {
+                backup = seeker.gameObject.AddComponent<BVRFloatBackup>();
+                backup.value = rejectionField.GetValue<float>();
+            }
+
+            float multiplier = Plugin.FlareRejectionMultiplier.Value;
+
+            rejectionField.SetValue(backup.value * multiplier);
+        }
+
+        private static void RestoreSeeker(IRSeeker seeker)
+        {
+            if (seeker == null)
+                return;
+
+            BVRFloatBackup backup = seeker.GetComponent<BVRFloatBackup>();
+
+            if (backup == null)
+                return;
+
+            Traverse traverse = Traverse.Create(seeker);
+
+            Traverse rejectionField = traverse.Field("flareRejection");
+
+            if (!rejectionField.FieldExists())
+                return;
+
+            rejectionField.SetValue(backup.value);
+
+            BVRBackupUtility.DestroyComponent(backup);
+        }
+    }
+
+    // ====================================================================================================
+    // SARH LOCK PERSISTENCE HELPER
+    // ====================================================================================================
+    internal static class SARHLockPersistenceHelper
+    {
+        public static void Apply(string targetName, float lockPersistence, string logTag)
+        {
+            int patchedCount = 0;
+
+            SARHSeeker[] seekers = Resources.FindObjectsOfTypeAll<SARHSeeker>();
+
+            foreach (SARHSeeker seeker in seekers)
+            {
+                if (seeker == null)
+                    continue;
+
+                if (!ObjectNameUtility.IsUnderNamedObject(seeker.gameObject, targetName))
+                    continue;
+
+                float originalValue;
+
+                if (!TryGetLockPersistence(seeker, out originalValue))
+                    continue;
+
+                BVRFloatBackup backup = seeker.GetComponent<BVRFloatBackup>();
+
+                if (backup == null)
+                {
+                    backup = seeker.gameObject.AddComponent<BVRFloatBackup>();
+                    backup.value = originalValue;
+                }
+
+                if (SetLockPersistence(seeker, lockPersistence))
+                    patchedCount++;
+            }
+
+            if (patchedCount <= 0)
+                Debug.LogWarning($"[{logTag}] Could not find SARHSeeker.lockPersistence on {targetName}.");
+            else
+                Debug.Log($"[{logTag}] Set lockPersistence={lockPersistence} on {patchedCount} seeker(s) under {targetName}.");
+        }
+
+        public static void Unapply(string targetName, string logTag)
+        {
+            int restoredCount = 0;
+
+            SARHSeeker[] seekers = Resources.FindObjectsOfTypeAll<SARHSeeker>();
+
+            foreach (SARHSeeker seeker in seekers)
+            {
+                if (seeker == null)
+                    continue;
+
+                if (!ObjectNameUtility.IsUnderNamedObject(seeker.gameObject, targetName))
+                    continue;
+
+                BVRFloatBackup backup = seeker.GetComponent<BVRFloatBackup>();
+
+                if (backup == null)
+                    continue;
+
+                if (SetLockPersistence(seeker, backup.value))
+                {
+                    BVRBackupUtility.DestroyComponent(backup);
+                    restoredCount++;
+                }
+            }
+
+            if (restoredCount > 0)
+                Debug.Log($"[{logTag}] Restored lockPersistence on {restoredCount} seeker(s) under {targetName}.");
+        }
+
+        private static bool TryGetLockPersistence(SARHSeeker seeker, out float value)
+        {
+            value = 0f;
+
+            Traverse traverse = Traverse.Create(seeker);
+
+            Traverse field = traverse.Field("lockPersistence");
+
+            if (field.FieldExists())
+            {
+                value = field.GetValue<float>();
                 return true;
             }
 
-            if (rootName.Contains("SAM_Radar1") && Plugin.EnableRAM45SARHRelock.Value)
+            Traverse property = traverse.Property("lockPersistence");
+
+            if (property.PropertyExists())
             {
-                delay = Mathf.Max(0f, Plugin.RAM45SARHRelockDelay.Value);
-                attempts = Mathf.Max(0, Plugin.RAM45SARHRelockAttempts.Value);
+                value = property.GetValue<float>();
+                return true;
+            }
+
+            return false;
+        }
+
+        private static bool SetLockPersistence(SARHSeeker seeker, float value)
+        {
+            Traverse traverse = Traverse.Create(seeker);
+
+            Traverse field = traverse.Field("lockPersistence");
+
+            if (field.FieldExists())
+            {
+                field.SetValue(value);
+                return true;
+            }
+
+            Traverse property = traverse.Property("lockPersistence");
+
+            if (property.PropertyExists())
+            {
+                property.SetValue(value);
                 return true;
             }
 
@@ -2185,302 +3164,358 @@ namespace BalanceAndVarietyRework
         }
     }
 
-
-
     // ====================================================================================================
-    // CI-22 CRICKET CHANGES (COIN)
-    // Config Category: CI-22 Cricket Changes
+    // SARH LOCK PERSISTENCE FEATURES
     // ====================================================================================================
-
-
-
-    [HarmonyPatch(typeof(WeaponManager), "Awake")]
-    public static class CricketLynchpinx14DoublePatch
+    [BvrFeature("R9LockPersistence", ToggleField = nameof(Plugin.EnableR9LockPersistenceBuff), Order = 20)]
+    public static class R9LockPersistenceFeature
     {
-        private static bool hasPatched = false;
+        private const string FeatureId = "R9LockPersistence";
 
-        public static void Prefix()
+        public static void Apply()
         {
-            if (!Plugin.EnableCricketLynchpinx14Double.Value || hasPatched)
-                return;
+            SARHLockPersistenceHelper.Apply(
+                "SAM_Radar2",
+                Plugin.R9LockPersistenceValue.Value,
+                FeatureId);
+        }
 
-            WeaponMount doubleMount = CustomWeaponsReusedAssets.GetExternalLynchpinx14Double();
-            if (doubleMount == null)
-                return;
+        public static void Unapply()
+        {
+            SARHLockPersistenceHelper.Unapply(
+                "SAM_Radar2",
+                FeatureId);
+        }
+    }
 
-            HardpointInjection.InjectWeaponMount(
+    [BvrFeature("RAM45LockPersistence", ToggleField = nameof(Plugin.EnableRAM45LockPersistenceBuff), Order = 21)]
+    public static class RAM45LockPersistenceFeature
+    {
+        private const string FeatureId = "RAM45LockPersistence";
+
+        public static void Apply()
+        {
+            SARHLockPersistenceHelper.Apply(
+                "SAM_Radar1",
+                Plugin.RAM45LockPersistenceValue.Value,
+                FeatureId);
+        }
+
+        public static void Unapply()
+        {
+            SARHLockPersistenceHelper.Unapply(
+                "SAM_Radar1",
+                FeatureId);
+        }
+    }
+
+    // ====================================================================================================
+    // CI-22 CRICKET HARDPOINT FEATURES
+    // ====================================================================================================
+    [BvrFeature("CricketLynchpinx14Double", ToggleField = nameof(Plugin.EnableCricketLynchpinx14Double), Order = 100)]
+    public static class CricketLynchpinx14DoubleFeature
+    {
+        private const string FeatureId = "CricketLynchpinx14Double";
+
+        public static void Apply()
+        {
+            HardpointFeatureHelper.Apply(
+                FeatureId,
+                CustomWeaponsReusedAssets.GetExternalLynchpinx14Double,
                 "COIN",
-                doubleMount,
                 new[] { 2, 3 },
-                "CricketLynchpinx14Double",
+                FeatureId,
                 "double rockets",
-                "hardpoint sets 2 and 3",
-                null);
+                "hardpoint sets 2 and 3");
+        }
 
-            hasPatched = true;
-            Debug.Log("[CricketLynchpinx14Double] Master Prefab injection complete!");
+        public static void Unapply()
+        {
+            HardpointFeatureHelper.Unapply(FeatureId, FeatureId);
         }
     }
 
-
-
-    [HarmonyPatch(typeof(WeaponManager), "Awake")]
-    public static class CricketKingpinx8DoublePatch
+    [BvrFeature("CricketKingpinx8Double", ToggleField = nameof(Plugin.EnableCricketKingpinx8Double), Order = 101)]
+    public static class CricketKingpinx8DoubleFeature
     {
-        private static bool hasPatched = false;
+        private const string FeatureId = "CricketKingpinx8Double";
 
-        public static void Prefix()
+        public static void Apply()
         {
-            if (!Plugin.EnableCricketKingpinx8Double.Value || hasPatched)
-                return;
-
-            WeaponMount doubleMount = CustomWeaponsReusedAssets.GetExternalKingpinx8Double();
-            if (doubleMount == null)
-                return;
-
-            HardpointInjection.InjectWeaponMount(
+            HardpointFeatureHelper.Apply(
+                FeatureId,
+                CustomWeaponsReusedAssets.GetExternalKingpinx8Double,
                 "COIN",
-                doubleMount,
                 new[] { 2, 3 },
-                "CricketKingpinx8Double",
+                FeatureId,
                 "double rockets",
-                "hardpoint sets 2 and 3",
-                null);
+                "hardpoint sets 2 and 3");
+        }
 
-            hasPatched = true;
-            Debug.Log("[CricketKingpinx8Double] Master Prefab injection complete!");
+        public static void Unapply()
+        {
+            HardpointFeatureHelper.Unapply(FeatureId, FeatureId);
         }
     }
 
-
-
     // ====================================================================================================
-    // T/A-30 COMPASS CHANGES (trainer)
-    // Config Category: T/A-30 Compass Changes
+    // T/A-30 COMPASS HARDPOINT FEATURES
     // ====================================================================================================
-
-
-
-    [HarmonyPatch(typeof(WeaponManager), "Awake")]
-    public static class CompassLynchpinx14DoublePatch
+    [BvrFeature("CompassLynchpinx14Double", ToggleField = nameof(Plugin.EnableCompassLynchpinx14Double), Order = 110)]
+    public static class CompassLynchpinx14DoubleFeature
     {
-        private static bool hasPatched = false;
+        private const string FeatureId = "CompassLynchpinx14Double";
 
-        public static void Prefix()
+        public static void Apply()
         {
-            if (!Plugin.EnableCompassLynchpinx14Double.Value || hasPatched)
-                return;
-
-            WeaponMount doubleMount = CustomWeaponsReusedAssets.GetExternalLynchpinx14Double();
-            if (doubleMount == null)
-                return;
-
-            HardpointInjection.InjectWeaponMount(
+            HardpointFeatureHelper.Apply(
+                FeatureId,
+                CustomWeaponsReusedAssets.GetExternalLynchpinx14Double,
                 "trainer",
-                doubleMount,
                 new[] { 1 },
-                "CompassLynchpinx14Double",
+                FeatureId,
                 "double rockets",
-                "hardpoint set 1",
-                null);
+                "hardpoint set 1");
+        }
 
-            hasPatched = true;
-            Debug.Log("[CompassLynchpinx14Double] Master Prefab injection complete!");
+        public static void Unapply()
+        {
+            HardpointFeatureHelper.Unapply(FeatureId, FeatureId);
         }
     }
 
-
-
-    [HarmonyPatch(typeof(WeaponManager), "Awake")]
-    public static class CompassKingpinx8DoublePatch
+    [BvrFeature("CompassKingpinx8Double", ToggleField = nameof(Plugin.EnableCompassKingpinx8Double), Order = 111)]
+    public static class CompassKingpinx8DoubleFeature
     {
-        private static bool hasPatched = false;
+        private const string FeatureId = "CompassKingpinx8Double";
 
-        public static void Prefix()
+        public static void Apply()
         {
-            if (!Plugin.EnableCompassKingpinx8Double.Value || hasPatched)
-                return;
-
-            WeaponMount doubleMount = CustomWeaponsReusedAssets.GetExternalKingpinx8Double();
-            if (doubleMount == null)
-                return;
-
-            HardpointInjection.InjectWeaponMount(
+            HardpointFeatureHelper.Apply(
+                FeatureId,
+                CustomWeaponsReusedAssets.GetExternalKingpinx8Double,
                 "trainer",
-                doubleMount,
                 new[] { 1 },
-                "CompassKingpinx8Double",
+                FeatureId,
                 "double rockets",
-                "hardpoint set 1",
-                null);
+                "hardpoint set 1");
+        }
 
-            hasPatched = true;
-            Debug.Log("[CompassKingpinx8Double] Master Prefab injection complete!");
+        public static void Unapply()
+        {
+            HardpointFeatureHelper.Unapply(FeatureId, FeatureId);
         }
     }
 
-
-
     // ====================================================================================================
-    // VT-7 VAGRANT CHANGES (VTOLTrainer1)
-    // Config Category: VT-7 Vagrant Changes
+    // VT-7 VAGRANT HARDPOINT FEATURES
     // ====================================================================================================
-
-
-
-    [HarmonyPatch(typeof(WeaponManager), "Awake")]
-    public static class VagrantLynchpinx14DoublePatch
+    [BvrFeature("VagrantLynchpinx14Double", ToggleField = nameof(Plugin.EnableVagrantLynchpinx14Double), Order = 120)]
+    public static class VagrantLynchpinx14DoubleFeature
     {
-        private static bool hasPatched = false;
+        private const string FeatureId = "VagrantLynchpinx14Double";
 
-        public static void Prefix()
+        public static void Apply()
         {
-            if (!Plugin.EnableVagrantLynchpinx14Double.Value || hasPatched)
-                return;
-
-            WeaponMount doubleMount = CustomWeaponsReusedAssets.GetExternalLynchpinx14Double();
-            if (doubleMount == null)
-                return;
-
-            HardpointInjection.InjectWeaponMount(
+            HardpointFeatureHelper.Apply(
+                FeatureId,
+                CustomWeaponsReusedAssets.GetExternalLynchpinx14Double,
                 "VTOLTrainer1",
-                doubleMount,
                 new[] { 3 },
-                "VagrantLynchpinx14Double",
+                FeatureId,
                 "double rockets",
-                "hardpoint set 3",
-                null);
+                "hardpoint set 3");
+        }
 
-            hasPatched = true;
-            Debug.Log("[VagrantLynchpinx14Double] Master Prefab injection complete!");
+        public static void Unapply()
+        {
+            HardpointFeatureHelper.Unapply(FeatureId, FeatureId);
         }
     }
 
-
-
-    [HarmonyPatch(typeof(WeaponManager), "Awake")]
-    public static class VagrantKingpinx8DoublePatch
+    [BvrFeature("VagrantKingpinx8Double", ToggleField = nameof(Plugin.EnableVagrantKingpinx8Double), Order = 121)]
+    public static class VagrantKingpinx8DoubleFeature
     {
-        private static bool hasPatched = false;
+        private const string FeatureId = "VagrantKingpinx8Double";
 
-        public static void Prefix()
+        public static void Apply()
         {
-            if (!Plugin.EnableVagrantKingpinx8Double.Value || hasPatched)
-                return;
-
-            WeaponMount doubleMount = CustomWeaponsReusedAssets.GetExternalKingpinx8Double();
-            if (doubleMount == null)
-                return;
-
-            HardpointInjection.InjectWeaponMount(
+            HardpointFeatureHelper.Apply(
+                FeatureId,
+                CustomWeaponsReusedAssets.GetExternalKingpinx8Double,
                 "VTOLTrainer1",
-                doubleMount,
                 new[] { 3 },
-                "VagrantKingpinx8Double",
+                FeatureId,
                 "double rockets",
-                "hardpoint set 3",
-                null);
+                "hardpoint set 3");
+        }
 
-            hasPatched = true;
-            Debug.Log("[VagrantKingpinx8Double] Master Prefab injection complete!");
+        public static void Unapply()
+        {
+            HardpointFeatureHelper.Unapply(FeatureId, FeatureId);
         }
     }
 
-
-
     // ====================================================================================================
-    // UH-90 IBIS CHANGES (UtilityHelo1)
-    // Config Category: UH-90 Ibis Changes
+    // UH-90 IBIS HARDPOINT FEATURES
     // ====================================================================================================
-
-
-
-    [HarmonyPatch(typeof(WeaponManager), "Awake")]
-    public static class IbisLynchpinx14DoublePatch
+    [BvrFeature("IbisLynchpinx14Double", ToggleField = nameof(Plugin.EnableIbisLynchpinx14Double), Order = 130)]
+    public static class IbisLynchpinx14DoubleFeature
     {
-        private static bool hasPatched = false;
+        private const string FeatureId = "IbisLynchpinx14Double";
 
-        public static void Prefix()
+        public static void Apply()
         {
-            if (!Plugin.EnableIbisLynchpinx14Double.Value || hasPatched)
-                return;
-
-            WeaponMount doubleMount = CustomWeaponsReusedAssets.GetExternalLynchpinx14Double();
-            if (doubleMount == null)
-                return;
-
-            HardpointInjection.InjectWeaponMount(
+            HardpointFeatureHelper.Apply(
+                FeatureId,
+                CustomWeaponsReusedAssets.GetExternalLynchpinx14Double,
                 "UtilityHelo1",
-                doubleMount,
                 new[] { 0, 1 },
-                "IbisLynchpinx14Double",
+                FeatureId,
                 "double rockets",
-                "hardpoint sets 0 and 1",
-                null);
+                "hardpoint sets 0 and 1");
+        }
 
-            hasPatched = true;
-            Debug.Log("[IbisLynchpinx14Double] Master Prefab injection complete!");
+        public static void Unapply()
+        {
+            HardpointFeatureHelper.Unapply(FeatureId, FeatureId);
         }
     }
 
-
-
-    [HarmonyPatch(typeof(WeaponManager), "Awake")]
-    public static class IbisKingpinx8DoublePatch
+    [BvrFeature("IbisKingpinx8Double", ToggleField = nameof(Plugin.EnableIbisKingpinx8Double), Order = 131)]
+    public static class IbisKingpinx8DoubleFeature
     {
-        private static bool hasPatched = false;
+        private const string FeatureId = "IbisKingpinx8Double";
 
-        public static void Prefix()
+        public static void Apply()
         {
-            if (!Plugin.EnableIbisKingpinx8Double.Value || hasPatched)
-                return;
-
-            WeaponMount doubleMount = CustomWeaponsReusedAssets.GetExternalKingpinx8Double();
-            if (doubleMount == null)
-                return;
-
-            HardpointInjection.InjectWeaponMount(
+            HardpointFeatureHelper.Apply(
+                FeatureId,
+                CustomWeaponsReusedAssets.GetExternalKingpinx8Double,
                 "UtilityHelo1",
-                doubleMount,
                 new[] { 0, 1 },
-                "IbisKingpinx8Double",
+                FeatureId,
                 "double rockets",
-                "hardpoint sets 0 and 1",
-                null);
+                "hardpoint sets 0 and 1");
+        }
 
-            hasPatched = true;
-            Debug.Log("[IbisKingpinx8Double] Master Prefab injection complete!");
+        public static void Unapply()
+        {
+            HardpointFeatureHelper.Unapply(FeatureId, FeatureId);
         }
     }
 
-
-
     // ====================================================================================================
-    // SAH-46 CHICANE CHANGES (AttackHelo1)
-    // Config Category: SAH-46 Chicane Changes
+    // SAH-46 CHICANE HARDPOINT / INTERNAL BAY FEATURES
     // ====================================================================================================
-
-
-
-    // ====================================================================================================
-    // CHICANE PROXIMITY FUSE NOSEGUN
-    // ====================================================================================================
-
-
-
-    [HarmonyPatch(typeof(WeaponManager), "Awake")]
-    public static class ProxyGunPatch
+    [BvrFeature("ChicaneScytheSingle", ToggleField = nameof(Plugin.EnableChicaneScythesSingle), Order = 140)]
+    public static class ChicaneScytheSingleFeature
     {
-        private static bool hasPatchedGun = false;
+        private const string FeatureId = "ChicaneScytheSingle";
 
-        public static void Prefix()
+        public static void Apply()
         {
-            if (!Plugin.EnableChicaneProxyGun.Value)
-                return;
+            HardpointFeatureHelper.Apply(
+                FeatureId,
+                () => HardpointFeatureHelper.GetExistingMount("AAM2_single"),
+                "AttackHelo1",
+                new[] { 2 },
+                FeatureId,
+                "AAM-24 Scythe x1",
+                "inner stub pylons");
+        }
 
-            if (hasPatchedGun)
-                return;
+        public static void Unapply()
+        {
+            HardpointFeatureHelper.Unapply(FeatureId, FeatureId);
+        }
+    }
 
+    [BvrFeature("ChicaneScytheDouble", ToggleField = nameof(Plugin.EnableChicaneScythesDouble), Order = 141)]
+    public static class ChicaneScytheDoubleFeature
+    {
+        private const string FeatureId = "ChicaneScytheDouble";
+
+        public static void Apply()
+        {
+            HardpointFeatureHelper.Apply(
+                FeatureId,
+                () => HardpointFeatureHelper.GetExistingMount("AAM2_double"),
+                "AttackHelo1",
+                new[] { 2 },
+                FeatureId,
+                "AAM-24 Scythe x2",
+                "inner stub pylons");
+        }
+
+        public static void Unapply()
+        {
+            HardpointFeatureHelper.Unapply(FeatureId, FeatureId);
+        }
+    }
+
+    [BvrFeature("ChicaneInternalLynchpinx14", ToggleField = nameof(Plugin.EnableChicaneInternalLynchpinx14), Order = 142)]
+    public static class ChicaneInternalLynchpinx14Feature
+    {
+        private const string FeatureId = "ChicaneInternalLynchpinx14";
+
+        public static void Apply()
+        {
+            HardpointFeatureHelper.Apply(
+                FeatureId,
+                CustomWeaponsReusedAssets.GetInternalLynchpinx14Double,
+                "AttackHelo1",
+                new[] { 1 },
+                FeatureId,
+                "double rockets",
+                "internal bays");
+        }
+
+        public static void Unapply()
+        {
+            HardpointFeatureHelper.Unapply(FeatureId, FeatureId);
+        }
+    }
+
+    [BvrFeature("ChicaneInternalKingpinx8", ToggleField = nameof(Plugin.EnableChicaneInternalKingpinx8), Order = 143)]
+    public static class ChicaneInternalKingpinx8Feature
+    {
+        private const string FeatureId = "ChicaneInternalKingpinx8";
+
+        public static void Apply()
+        {
+            HardpointFeatureHelper.Apply(
+                FeatureId,
+                CustomWeaponsReusedAssets.GetInternalKingpinx8Double,
+                "AttackHelo1",
+                new[] { 1 },
+                FeatureId,
+                "double rockets",
+                "internal bays");
+        }
+
+        public static void Unapply()
+        {
+            HardpointFeatureHelper.Unapply(FeatureId, FeatureId);
+        }
+    }
+
+    // ====================================================================================================
+    // CHICANE PROXIMITY FUSE NOSEGUN FEATURE
+    // ====================================================================================================
+    [BvrFeature("ChicaneProxyGun", ToggleField = nameof(Plugin.EnableChicaneProxyGun), Order = 150)]
+    public static class ChicaneProxyGunFeature
+    {
+        private sealed class Record
+        {
+            public object weapon;
+            public bool original;
+        }
+
+        private static readonly List<Record> records = new List<Record>();
+
+        public static void Apply()
+        {
             WeaponManager[] allWeaponManagers = Resources.FindObjectsOfTypeAll<WeaponManager>();
 
             foreach (WeaponManager wm in allWeaponManagers)
@@ -2491,228 +3526,139 @@ namespace BalanceAndVarietyRework
                 if (!wm.transform.root.name.Contains("AttackHelo1"))
                     continue;
 
-                bool success = TryPatchProxyGun(wm.transform.root.gameObject);
-                if (success)
-                {
-                    Debug.Log($"[ChicaneProxyGun] Successfully enabled proxy timer on: {wm.gameObject.name}");
-                }
+                TryApplyProxyGun(wm.transform.root.gameObject);
             }
 
-            hasPatchedGun = true;
-            Debug.Log("[ChicaneProxyGun] Master Prefab sweep complete!");
+            Debug.Log("[ChicaneProxyGun] Feature applied.");
         }
 
-        private static bool TryPatchProxyGun(GameObject rootVehicle)
+        public static void Unapply()
+        {
+            for (int i = records.Count - 1; i >= 0; i--)
+            {
+                Record record = records[i];
+
+                if (!IsDead(record.weapon))
+                {
+                    Traverse weaponTraverse = Traverse.Create(record.weapon);
+                    Traverse proxyTimerField = weaponTraverse.Field("proximityTimer");
+
+                    if (proxyTimerField.FieldExists())
+                        proxyTimerField.SetValue(record.original);
+                }
+
+                records.RemoveAt(i);
+            }
+
+            Debug.Log("[ChicaneProxyGun] Feature unapplied.");
+        }
+
+        private static bool TryApplyProxyGun(GameObject rootVehicle)
         {
             MonoBehaviour[] allComponents = rootVehicle.GetComponentsInChildren<MonoBehaviour>(true);
 
             foreach (MonoBehaviour comp in allComponents)
             {
                 Traverse compTraverse = Traverse.Create(comp);
+
                 Traverse stationsField = compTraverse.Field("weaponStations");
 
                 if (!stationsField.FieldExists())
                     continue;
 
                 IList stationsList = stationsField.GetValue<IList>();
+
                 if (stationsList == null || stationsList.Count <= 0)
                     continue;
 
                 object firstStation = stationsList[0];
+
                 Traverse stationTraverse = Traverse.Create(firstStation);
+
                 Traverse weaponsField = stationTraverse.Field("Weapons");
 
                 if (!weaponsField.FieldExists())
                     continue;
 
                 IList weaponsList = weaponsField.GetValue<IList>();
+
                 if (weaponsList == null || weaponsList.Count <= 0)
                     continue;
 
                 object firstWeapon = weaponsList[0];
+
                 Traverse weaponTraverse = Traverse.Create(firstWeapon);
+
                 Traverse proxyTimerField = weaponTraverse.Field("proximityTimer");
 
-                if (proxyTimerField.FieldExists())
+                if (!proxyTimerField.FieldExists())
+                    continue;
+
+                bool currentValue = proxyTimerField.GetValue<bool>();
+
+                Record existing;
+
+                if (!TryGetRecord(firstWeapon, out existing))
                 {
-                    proxyTimerField.SetValue(true);
-                    return true;
+                    records.Add(new Record
+                    {
+                        weapon = firstWeapon,
+                        original = currentValue
+                    });
                 }
+
+                proxyTimerField.SetValue(true);
+
+                return true;
             }
 
             return false;
         }
-    }
 
-
-
-    // ====================================================================================================
-    // CHICANE INNER WING SCYTHES
-    // ====================================================================================================
-
-
-
-    [HarmonyPatch(typeof(WeaponManager), "Awake")]
-    public static class ChicaneScythePatch
-    {
-        private static bool hasPatchedPrefab = false;
-
-        public static void Prefix()
+        private static bool TryGetRecord(object weapon, out Record record)
         {
-            if (!Plugin.EnableChicaneScythesSingle.Value && !Plugin.EnableChicaneScythesDouble.Value)
-                return;
-
-            if (hasPatchedPrefab)
-                return;
-
-            WeaponMount[] allMounts = Resources.FindObjectsOfTypeAll<WeaponMount>();
-            WeaponMount aam2Single = allMounts.FirstOrDefault(w => w != null && w.jsonKey == "AAM2_single");
-            WeaponMount aam2Double = allMounts.FirstOrDefault(w => w != null && w.jsonKey == "AAM2_double");
-
-            if (aam2Single == null || aam2Double == null)
-                return;
-
-            WeaponManager[] allWeaponManagers = Resources.FindObjectsOfTypeAll<WeaponManager>();
-
-            foreach (WeaponManager wm in allWeaponManagers)
+            for (int i = records.Count - 1; i >= 0; i--)
             {
-                if (wm == null || wm.transform == null || wm.transform.root == null)
-                    continue;
+                if (IsDead(records[i].weapon))
+                    records.RemoveAt(i);
+            }
 
-                if (!wm.transform.root.name.Contains("AttackHelo1"))
-                    continue;
-
-                if (wm.hardpointSets == null || wm.hardpointSets.Length <= 2)
-                    continue;
-
-                var stubPylons = wm.hardpointSets[2];
-                if (stubPylons == null || stubPylons.weaponOptions == null)
-                    continue;
-
-                bool updated = false;
-
-                if (Plugin.EnableChicaneScythesSingle.Value &&
-                    !stubPylons.weaponOptions.Any(w => w != null && w.jsonKey == "AAM2_single"))
+            foreach (Record r in records)
+            {
+                if (object.ReferenceEquals(r.weapon, weapon))
                 {
-                    stubPylons.weaponOptions.Add(aam2Single);
-                    updated = true;
-                }
-
-                if (Plugin.EnableChicaneScythesDouble.Value &&
-                    !stubPylons.weaponOptions.Any(w => w != null && w.jsonKey == "AAM2_double"))
-                {
-                    stubPylons.weaponOptions.Add(aam2Double);
-                    updated = true;
-                }
-
-                if (updated)
-                {
-                    Debug.Log($"[ChicaneScythe] Successfully dynamically injected AAM-24 mounts into: {wm.gameObject.name}");
+                    record = r;
+                    return true;
                 }
             }
 
-            hasPatchedPrefab = true;
-            Debug.Log("[ChicaneScythe] Successfully patched Chicane Prefabs with selected Scythe configs!");
+            record = null;
+            return false;
         }
-    }
 
-
-
-    // ====================================================================================================
-    // CHICANE INTERNAL BAY LYNCHPIN X14
-    // ====================================================================================================
-
-
-
-    [HarmonyPatch(typeof(WeaponManager), "Awake")]
-    public static class ChicaneInternalLynchpinx14Patch
-    {
-        private static bool hasPatchedInternalLynchpinx14 = false;
-
-        public static void Prefix()
+        private static bool IsDead(object target)
         {
-            if (!Plugin.EnableChicaneInternalLynchpinx14.Value || hasPatchedInternalLynchpinx14)
-                return;
+            if (target == null)
+                return true;
 
-            WeaponMount doubleMount = CustomWeaponsReusedAssets.GetInternalLynchpinx14Double();
-            if (doubleMount == null)
-                return;
+            if (!(target is UnityEngine.Object))
+                return false;
 
-            HardpointInjection.InjectWeaponMount(
-                "AttackHelo1",
-                doubleMount,
-                new[] { 1 },
-                "ChicaneInternalLynchpinx14",
-                "double rockets",
-                "internal bays",
-                null);
-
-            hasPatchedInternalLynchpinx14 = true;
-            Debug.Log("[ChicaneInternalLynchpinx14] Master Prefab injection complete!");
+            return (UnityEngine.Object)target == null;
         }
     }
 
-
-
     // ====================================================================================================
-    // CHICANE INTERNAL BAY KINGPIN X8
+    // CHICANE BAY PYLON SYMMETRY FIX FEATURE
     // ====================================================================================================
-
-
-
-    [HarmonyPatch(typeof(WeaponManager), "Awake")]
-    public static class ChicaneInternalKingpinx8Patch
+    [BvrFeature("ChicaneBayPylonSymmetryFix", ToggleField = nameof(Plugin.EnableChicaneBayPylonSymmetryFix), Order = 151)]
+    public static class ChicaneBayPylonSymmetryFixFeature
     {
-        private static bool hasPatchedInternalKingpinx8 = false;
-
-        public static void Prefix()
-        {
-            if (!Plugin.EnableChicaneInternalKingpinx8.Value || hasPatchedInternalKingpinx8)
-                return;
-
-            WeaponMount doubleMount = CustomWeaponsReusedAssets.GetInternalKingpinx8Double();
-            if (doubleMount == null)
-                return;
-
-            HardpointInjection.InjectWeaponMount(
-                "AttackHelo1",
-                doubleMount,
-                new[] { 1 },
-                "ChicaneInternalKingpinx8",
-                "double rockets",
-                "internal bays",
-                null);
-
-            hasPatchedInternalKingpinx8 = true;
-            Debug.Log("[ChicaneInternalKingpinx8] Master Prefab injection complete!");
-        }
-    }
-
-
-
-    // ====================================================================================================
-    // CHICANE BAY PYLON SYMMETRY FIX
-    // ====================================================================================================
-
-
-
-    [HarmonyPatch(typeof(WeaponManager), "Awake")]
-    public static class ChicaneBayPylonSymmetryFixPatch
-    {
-        private static bool hasPatchedBayPylon = false;
-
         private const string BayPylonPath = "weaponBay_R/weaponDoorHinge_Ra/weaponDoorHinge_Rb/pylon_bay_R";
         private static readonly Vector3 BayPylonLocalPosition = new Vector3(0f, -0.35f, -0.1f);
 
-        public static void Prefix()
+        public static void Apply()
         {
-            if (!Plugin.EnableChicaneBayPylonSymmetryFix.Value)
-                return;
-
-            if (hasPatchedBayPylon)
-                return;
-
-            bool patchedAny = false;
             WeaponManager[] allWeaponManagers = Resources.FindObjectsOfTypeAll<WeaponManager>();
 
             foreach (WeaponManager wm in allWeaponManagers)
@@ -2723,332 +3669,282 @@ namespace BalanceAndVarietyRework
                 if (!wm.transform.root.name.Contains("AttackHelo1"))
                     continue;
 
-                bool success = TryFixBayPylon(wm.transform.root.gameObject);
-                if (success)
-                {
-                    Debug.Log($"[ChicaneBayPylonSymmetryFix] Successfully centered bay pylon on: {wm.gameObject.name}");
-                    patchedAny = true;
-                }
+                TryApply(wm.transform.root.gameObject);
             }
 
-            if (patchedAny)
-            {
-                hasPatchedBayPylon = true;
-                Debug.Log("[ChicaneBayPylonSymmetryFix] Master Prefab sweep complete!");
-            }
+            Debug.Log("[ChicaneBayPylonSymmetryFix] Feature applied.");
         }
 
-        private static bool TryFixBayPylon(GameObject rootVehicle)
+        public static void Unapply()
+        {
+            WeaponManager[] allWeaponManagers = Resources.FindObjectsOfTypeAll<WeaponManager>();
+
+            foreach (WeaponManager wm in allWeaponManagers)
+            {
+                if (wm == null || wm.transform == null || wm.transform.root == null)
+                    continue;
+
+                if (!wm.transform.root.name.Contains("AttackHelo1"))
+                    continue;
+
+                TryRestore(wm.transform.root.gameObject);
+            }
+
+            Debug.Log("[ChicaneBayPylonSymmetryFix] Feature unapplied.");
+        }
+
+        private static bool TryApply(GameObject rootVehicle)
         {
             if (rootVehicle == null)
                 return false;
 
             Transform pylon = rootVehicle.transform.Find(BayPylonPath);
+
             if (pylon == null)
                 return false;
 
+            BVRVector3Backup backup = pylon.GetComponent<BVRVector3Backup>();
+
+            if (backup == null)
+            {
+                backup = pylon.gameObject.AddComponent<BVRVector3Backup>();
+                backup.value = pylon.localPosition;
+            }
+
             pylon.localPosition = BayPylonLocalPosition;
+
+            return true;
+        }
+
+        private static bool TryRestore(GameObject rootVehicle)
+        {
+            if (rootVehicle == null)
+                return false;
+
+            Transform pylon = rootVehicle.transform.Find(BayPylonPath);
+
+            if (pylon == null)
+                return false;
+
+            BVRVector3Backup backup = pylon.GetComponent<BVRVector3Backup>();
+
+            if (backup == null)
+                return false;
+
+            pylon.localPosition = backup.value;
+
+            BVRBackupUtility.DestroyComponent(backup);
+
             return true;
         }
     }
 
-
-
     // ====================================================================================================
-    // FS-12 REVOKER CHANGES (Fighter1)
-    // Config Category: FS-12 Revoker Changes
+    // FS-12 REVOKER HARDPOINT FEATURES
     // ====================================================================================================
-
-
-
-    [HarmonyPatch(typeof(WeaponManager), "Awake")]
-    public static class RevokerLynchpinx14DoublePatch
+    [BvrFeature("RevokerLynchpinx14Double", ToggleField = nameof(Plugin.EnableRevokerLynchpinx14Double), Order = 160)]
+    public static class RevokerLynchpinx14DoubleFeature
     {
-        private static bool hasPatched = false;
+        private const string FeatureId = "RevokerLynchpinx14Double";
 
-        public static void Prefix()
+        public static void Apply()
         {
-            if (!Plugin.EnableRevokerLynchpinx14Double.Value || hasPatched)
-                return;
-
-            WeaponMount doubleMount = CustomWeaponsReusedAssets.GetExternalLynchpinx14Double();
-            if (doubleMount == null)
-                return;
-
-            HardpointInjection.InjectWeaponMount(
+            HardpointFeatureHelper.Apply(
+                FeatureId,
+                CustomWeaponsReusedAssets.GetExternalLynchpinx14Double,
                 "Fighter1",
-                doubleMount,
                 new[] { 2 },
-                "RevokerLynchpinx14Double",
+                FeatureId,
                 "double rockets",
                 "hardpoint set 2",
                 "SmallFighter1");
+        }
 
-            hasPatched = true;
-            Debug.Log("[RevokerLynchpinx14Double] Master Prefab injection complete!");
+        public static void Unapply()
+        {
+            HardpointFeatureHelper.Unapply(FeatureId, FeatureId);
         }
     }
 
-
-
-    [HarmonyPatch(typeof(WeaponManager), "Awake")]
-    public static class RevokerKingpinx8DoublePatch
+    [BvrFeature("RevokerKingpinx8Double", ToggleField = nameof(Plugin.EnableRevokerKingpinx8Double), Order = 161)]
+    public static class RevokerKingpinx8DoubleFeature
     {
-        private static bool hasPatched = false;
+        private const string FeatureId = "RevokerKingpinx8Double";
 
-        public static void Prefix()
+        public static void Apply()
         {
-            if (!Plugin.EnableRevokerKingpinx8Double.Value || hasPatched)
-                return;
-
-            WeaponMount doubleMount = CustomWeaponsReusedAssets.GetExternalKingpinx8Double();
-            if (doubleMount == null)
-                return;
-
-            HardpointInjection.InjectWeaponMount(
+            HardpointFeatureHelper.Apply(
+                FeatureId,
+                CustomWeaponsReusedAssets.GetExternalKingpinx8Double,
                 "Fighter1",
-                doubleMount,
                 new[] { 2 },
-                "RevokerKingpinx8Double",
+                FeatureId,
                 "double rockets",
                 "hardpoint set 2",
                 "SmallFighter1");
+        }
 
-            hasPatched = true;
-            Debug.Log("[RevokerKingpinx8Double] Master Prefab injection complete!");
+        public static void Unapply()
+        {
+            HardpointFeatureHelper.Unapply(FeatureId, FeatureId);
         }
     }
 
-
-
     // ====================================================================================================
-    // FS-20 VORTEX CHANGES (SmallFighter1)
-    // Config Category: FS-20 Vortex Changes
+    // FS-20 VORTEX HARDPOINT FEATURES
     // ====================================================================================================
-
-
-
-    [HarmonyPatch(typeof(WeaponManager), "Awake")]
-    public static class VortexLynchpinx14DoublePatch
+    [BvrFeature("VortexLynchpinx14Double", ToggleField = nameof(Plugin.EnableVortexLynchpinx14Double), Order = 170)]
+    public static class VortexLynchpinx14DoubleFeature
     {
-        private static bool hasPatched = false;
+        private const string FeatureId = "VortexLynchpinx14Double";
 
-        public static void Prefix()
+        public static void Apply()
         {
-            if (!Plugin.EnableVortexLynchpinx14Double.Value || hasPatched)
-                return;
-
-            WeaponMount doubleMount = CustomWeaponsReusedAssets.GetExternalLynchpinx14Double();
-            if (doubleMount == null)
-                return;
-
-            HardpointInjection.InjectWeaponMount(
+            HardpointFeatureHelper.Apply(
+                FeatureId,
+                CustomWeaponsReusedAssets.GetExternalLynchpinx14Double,
                 "SmallFighter1",
-                doubleMount,
                 new[] { 3 },
-                "VortexLynchpinx14Double",
+                FeatureId,
                 "double rockets",
-                "hardpoint set 3",
-                null);
+                "hardpoint set 3");
+        }
 
-            hasPatched = true;
-            Debug.Log("[VortexLynchpinx14Double] Master Prefab injection complete!");
+        public static void Unapply()
+        {
+            HardpointFeatureHelper.Unapply(FeatureId, FeatureId);
         }
     }
 
-
-
-    [HarmonyPatch(typeof(WeaponManager), "Awake")]
-    public static class VortexKingpinx8DoublePatch
+    [BvrFeature("VortexKingpinx8Double", ToggleField = nameof(Plugin.EnableVortexKingpinx8Double), Order = 171)]
+    public static class VortexKingpinx8DoubleFeature
     {
-        private static bool hasPatched = false;
+        private const string FeatureId = "VortexKingpinx8Double";
 
-        public static void Prefix()
+        public static void Apply()
         {
-            if (!Plugin.EnableVortexKingpinx8Double.Value || hasPatched)
-                return;
-
-            WeaponMount doubleMount = CustomWeaponsReusedAssets.GetExternalKingpinx8Double();
-            if (doubleMount == null)
-                return;
-
-            HardpointInjection.InjectWeaponMount(
+            HardpointFeatureHelper.Apply(
+                FeatureId,
+                CustomWeaponsReusedAssets.GetExternalKingpinx8Double,
                 "SmallFighter1",
-                doubleMount,
                 new[] { 3 },
-                "VortexKingpinx8Double",
+                FeatureId,
                 "double rockets",
-                "hardpoint set 3",
-                null);
+                "hardpoint set 3");
+        }
 
-            hasPatched = true;
-            Debug.Log("[VortexKingpinx8Double] Master Prefab injection complete!");
+        public static void Unapply()
+        {
+            HardpointFeatureHelper.Unapply(FeatureId, FeatureId);
         }
     }
 
-
-
     // ====================================================================================================
-    // VL-49 TARANTULA CHANGES (QuadVTOL1)
-    // Config Category: VL-49 Tarantula Changes
+    // VL-49 TARANTULA HARDPOINT FEATURES
     // ====================================================================================================
-
-
-
-    [HarmonyPatch(typeof(WeaponManager), "Awake")]
-    public static class TarantulaLynchpinx14DoublePatch
+    [BvrFeature("TarantulaLynchpinx14Double", ToggleField = nameof(Plugin.EnableTarantulaLynchpinx14Double), Order = 180)]
+    public static class TarantulaLynchpinx14DoubleFeature
     {
-        private static bool hasPatched = false;
+        private const string FeatureId = "TarantulaLynchpinx14Double";
 
-        public static void Prefix()
+        public static void Apply()
         {
-            if (!Plugin.EnableTarantulaLynchpinx14Double.Value || hasPatched)
-                return;
-
-            WeaponMount doubleMount = CustomWeaponsReusedAssets.GetExternalLynchpinx14Double();
-            if (doubleMount == null)
-                return;
-
-            HardpointInjection.InjectWeaponMount(
+            HardpointFeatureHelper.Apply(
+                FeatureId,
+                CustomWeaponsReusedAssets.GetExternalLynchpinx14Double,
                 "QuadVTOL1",
-                doubleMount,
                 new[] { 4, 5 },
-                "TarantulaLynchpinx14Double",
+                FeatureId,
                 "double rockets",
-                "hardpoint sets 4 and 5",
-                null);
+                "hardpoint sets 4 and 5");
+        }
 
-            hasPatched = true;
-            Debug.Log("[TarantulaLynchpinx14Double] Master Prefab injection complete!");
+        public static void Unapply()
+        {
+            HardpointFeatureHelper.Unapply(FeatureId, FeatureId);
         }
     }
 
-
-
-    [HarmonyPatch(typeof(WeaponManager), "Awake")]
-    public static class TarantulaKingpinx8DoublePatch
+    [BvrFeature("TarantulaKingpinx8Double", ToggleField = nameof(Plugin.EnableTarantulaKingpinx8Double), Order = 181)]
+    public static class TarantulaKingpinx8DoubleFeature
     {
-        private static bool hasPatched = false;
+        private const string FeatureId = "TarantulaKingpinx8Double";
 
-        public static void Prefix()
+        public static void Apply()
         {
-            if (!Plugin.EnableTarantulaKingpinx8Double.Value || hasPatched)
-                return;
-
-            WeaponMount doubleMount = CustomWeaponsReusedAssets.GetExternalKingpinx8Double();
-            if (doubleMount == null)
-                return;
-
-            HardpointInjection.InjectWeaponMount(
+            HardpointFeatureHelper.Apply(
+                FeatureId,
+                CustomWeaponsReusedAssets.GetExternalKingpinx8Double,
                 "QuadVTOL1",
-                doubleMount,
                 new[] { 4, 5 },
-                "TarantulaKingpinx8Double",
+                FeatureId,
                 "double rockets",
-                "hardpoint sets 4 and 5",
-                null);
+                "hardpoint sets 4 and 5");
+        }
 
-            hasPatched = true;
-            Debug.Log("[TarantulaKingpinx8Double] Master Prefab injection complete!");
+        public static void Unapply()
+        {
+            HardpointFeatureHelper.Unapply(FeatureId, FeatureId);
         }
     }
 
-
-
     // ====================================================================================================
-    // KR-67 IFRIT CHANGES (Multirole1)
-    // Config Category: KR-67 Ifrit Changes
+    // KR-67 IFRIT HARDPOINT FEATURES
     // ====================================================================================================
-
-
-
-    [HarmonyPatch(typeof(WeaponManager), "Awake")]
-    public static class IfritLynchpinx14DoublePatch
+    [BvrFeature("IfritLynchpinx14Double", ToggleField = nameof(Plugin.EnableIfritLynchpinx14Double), Order = 190)]
+    public static class IfritLynchpinx14DoubleFeature
     {
-        private static bool hasPatched = false;
+        private const string FeatureId = "IfritLynchpinx14Double";
 
-        public static void Prefix()
+        public static void Apply()
         {
-            if (!Plugin.EnableIfritLynchpinx14Double.Value || hasPatched)
-                return;
-
-            WeaponMount doubleMount = CustomWeaponsReusedAssets.GetExternalLynchpinx14Double();
-            if (doubleMount == null)
-                return;
-
-            HardpointInjection.InjectWeaponMount(
+            HardpointFeatureHelper.Apply(
+                FeatureId,
+                CustomWeaponsReusedAssets.GetExternalLynchpinx14Double,
                 "Multirole1",
-                doubleMount,
                 new[] { 4, 5 },
-                "IfritLynchpinx14Double",
+                FeatureId,
                 "double rockets",
-                "hardpoint sets 4 and 5",
-                null);
+                "hardpoint sets 4 and 5");
+        }
 
-            hasPatched = true;
-            Debug.Log("[IfritLynchpinx14Double] Master Prefab injection complete!");
+        public static void Unapply()
+        {
+            HardpointFeatureHelper.Unapply(FeatureId, FeatureId);
         }
     }
 
-
-
-    [HarmonyPatch(typeof(WeaponManager), "Awake")]
-    public static class IfritKingpinx8DoublePatch
+    [BvrFeature("IfritKingpinx8Double", ToggleField = nameof(Plugin.EnableIfritKingpinx8Double), Order = 191)]
+    public static class IfritKingpinx8DoubleFeature
     {
-        private static bool hasPatched = false;
+        private const string FeatureId = "IfritKingpinx8Double";
 
-        public static void Prefix()
+        public static void Apply()
         {
-            if (!Plugin.EnableIfritKingpinx8Double.Value || hasPatched)
-                return;
-
-            WeaponMount doubleMount = CustomWeaponsReusedAssets.GetExternalKingpinx8Double();
-            if (doubleMount == null)
-                return;
-
-            HardpointInjection.InjectWeaponMount(
+            HardpointFeatureHelper.Apply(
+                FeatureId,
+                CustomWeaponsReusedAssets.GetExternalKingpinx8Double,
                 "Multirole1",
-                doubleMount,
                 new[] { 4, 5 },
-                "IfritKingpinx8Double",
+                FeatureId,
                 "double rockets",
-                "hardpoint sets 4 and 5",
-                null);
+                "hardpoint sets 4 and 5");
+        }
 
-            hasPatched = true;
-            Debug.Log("[IfritKingpinx8Double] Master Prefab injection complete!");
+        public static void Unapply()
+        {
+            HardpointFeatureHelper.Unapply(FeatureId, FeatureId);
         }
     }
 
-
-
     // ====================================================================================================
-    // EW-25 MEDUSA CHANGES (EW1)
-    // Config Category: EW-25 Medusa Changes
+    // EW-25 MEDUSA LASER FEATURE
     // ====================================================================================================
-
-
-
-    // ====================================================================================================
-    // MEDUSA LASER BUFF
-    // ====================================================================================================
-
-
-
-    [HarmonyPatch(typeof(WeaponManager), "Awake")]
-    public static class MedusaLaserPatch
+    [BvrFeature("MedusaLaserBuff", ToggleField = nameof(Plugin.EnableMedusaLaserBuff), Order = 200)]
+    public static class MedusaLaserFeature
     {
-        private static bool hasPatchedLaser = false;
-
-        public static void Prefix()
+        public static void Apply()
         {
-            if (!Plugin.EnableMedusaLaserBuff.Value)
-                return;
-
-            if (hasPatchedLaser)
-                return;
-
-            bool patchedAny = false;
             GameObject[] allGameObjects = Resources.FindObjectsOfTypeAll<GameObject>();
 
             foreach (GameObject go in allGameObjects)
@@ -3059,24 +3955,34 @@ namespace BalanceAndVarietyRework
                 if (!go.name.Contains("Laser_EW1"))
                     continue;
 
-                bool success = TryPatchMedusaLaser(go);
-                if (success)
-                {
-                    Debug.Log($"[MedusaLaserBuff] Successfully modified laser power draw on: {go.name}");
-                    patchedAny = true;
-                }
+                TryApplyLaser(go);
             }
 
-            if (patchedAny)
-            {
-                hasPatchedLaser = true;
-                Debug.Log("[MedusaLaserBuff] Master Prefab sweep for Medusa complete!");
-            }
+            Debug.Log("[MedusaLaserBuff] Feature applied.");
         }
 
-        private static bool TryPatchMedusaLaser(GameObject laserRoot)
+        public static void Unapply()
+        {
+            GameObject[] allGameObjects = Resources.FindObjectsOfTypeAll<GameObject>();
+
+            foreach (GameObject go in allGameObjects)
+            {
+                if (go == null)
+                    continue;
+
+                if (!go.name.Contains("Laser_EW1"))
+                    continue;
+
+                TryRestoreLaser(go);
+            }
+
+            Debug.Log("[MedusaLaserBuff] Feature unapplied.");
+        }
+
+        private static bool TryApplyLaser(GameObject laserRoot)
         {
             bool success = false;
+
             MonoBehaviour[] allComponents = laserRoot.GetComponentsInChildren<MonoBehaviour>(true);
 
             foreach (MonoBehaviour comp in allComponents)
@@ -3087,168 +3993,301 @@ namespace BalanceAndVarietyRework
                 if (!comp.gameObject.name.Contains("Laser") && !comp.GetType().Name.Contains("Laser"))
                     continue;
 
-                if (comp.gameObject.GetComponent<ModifiedStatsFlag>() != null)
+                Traverse compTraverse = Traverse.Create(comp);
+
+                Traverse powerField = compTraverse.Field("power");
+
+                if (!powerField.FieldExists())
+                    continue;
+
+                BVRFloatBackup backup = comp.GetComponent<BVRFloatBackup>();
+
+                if (backup == null)
+                {
+                    backup = comp.gameObject.AddComponent<BVRFloatBackup>();
+                    backup.value = powerField.GetValue<float>();
+                }
+
+                powerField.SetValue(Plugin.MedusaLaserPowerDraw.Value);
+                success = true;
+            }
+
+            return success;
+        }
+
+        private static bool TryRestoreLaser(GameObject laserRoot)
+        {
+            bool success = false;
+
+            MonoBehaviour[] allComponents = laserRoot.GetComponentsInChildren<MonoBehaviour>(true);
+
+            foreach (MonoBehaviour comp in allComponents)
+            {
+                if (comp == null)
+                    continue;
+
+                BVRFloatBackup backup = comp.GetComponent<BVRFloatBackup>();
+
+                if (backup == null)
                     continue;
 
                 Traverse compTraverse = Traverse.Create(comp);
+
                 Traverse powerField = compTraverse.Field("power");
 
-                if (powerField.FieldExists())
-                {
-                    powerField.SetValue(Plugin.MedusaLaserPowerDraw.Value);
-                    comp.gameObject.AddComponent<ModifiedStatsFlag>();
-                    success = true;
-                }
+                if (!powerField.FieldExists())
+                    continue;
+
+                powerField.SetValue(backup.value);
+
+                BVRBackupUtility.DestroyComponent(backup);
+
+                success = true;
             }
 
             return success;
         }
     }
 
-
-
     // ====================================================================================================
-    // MEDUSA LYNCHPIN X14 DOUBLE
+    // EW-25 MEDUSA HARDPOINT FEATURES
     // ====================================================================================================
-
-
-
-    [HarmonyPatch(typeof(WeaponManager), "Awake")]
-    public static class MedusaLynchpinx14DoublePatch
+    [BvrFeature("MedusaLynchpinx14Double", ToggleField = nameof(Plugin.EnableMedusaLynchpinx14Double), Order = 210)]
+    public static class MedusaLynchpinx14DoubleFeature
     {
-        private static bool hasPatched = false;
+        private const string FeatureId = "MedusaLynchpinx14Double";
 
-        public static void Prefix()
+        public static void Apply()
         {
-            if (!Plugin.EnableMedusaLynchpinx14Double.Value || hasPatched)
-                return;
-
-            WeaponMount doubleMount = CustomWeaponsReusedAssets.GetExternalLynchpinx14Double();
-            if (doubleMount == null)
-                return;
-
-            HardpointInjection.InjectWeaponMount(
+            HardpointFeatureHelper.Apply(
+                FeatureId,
+                CustomWeaponsReusedAssets.GetExternalLynchpinx14Double,
                 "EW1",
-                doubleMount,
                 new[] { 3 },
-                "MedusaLynchpinx14Double",
+                FeatureId,
                 "double rockets",
-                "hardpoint set 3",
-                null);
+                "hardpoint set 3");
+        }
 
-            hasPatched = true;
-            Debug.Log("[MedusaLynchpinx14Double] Master Prefab injection complete!");
+        public static void Unapply()
+        {
+            HardpointFeatureHelper.Unapply(FeatureId, FeatureId);
         }
     }
 
-
-
-    // ====================================================================================================
-    // MEDUSA KINGPIN X8 DOUBLE
-    // ====================================================================================================
-
-
-
-    [HarmonyPatch(typeof(WeaponManager), "Awake")]
-    public static class MedusaKingpinx8DoublePatch
+    [BvrFeature("MedusaKingpinx8Double", ToggleField = nameof(Plugin.EnableMedusaKingpinx8Double), Order = 211)]
+    public static class MedusaKingpinx8DoubleFeature
     {
-        private static bool hasPatched = false;
+        private const string FeatureId = "MedusaKingpinx8Double";
 
-        public static void Prefix()
+        public static void Apply()
         {
-            if (!Plugin.EnableMedusaKingpinx8Double.Value || hasPatched)
-                return;
-
-            WeaponMount doubleMount = CustomWeaponsReusedAssets.GetExternalKingpinx8Double();
-            if (doubleMount == null)
-                return;
-
-            HardpointInjection.InjectWeaponMount(
+            HardpointFeatureHelper.Apply(
+                FeatureId,
+                CustomWeaponsReusedAssets.GetExternalKingpinx8Double,
                 "EW1",
-                doubleMount,
                 new[] { 3 },
-                "MedusaKingpinx8Double",
+                FeatureId,
                 "double rockets",
-                "hardpoint set 3",
-                null);
+                "hardpoint set 3");
+        }
 
-            hasPatched = true;
-            Debug.Log("[MedusaKingpinx8Double] Master Prefab injection complete!");
+        public static void Unapply()
+        {
+            HardpointFeatureHelper.Unapply(FeatureId, FeatureId);
         }
     }
 
-
-
-    // ====================================================================================================
-    // MEDUSA SAM_RADAR2 SINGLE (R9 STRATOLANCE x1)
-    // ====================================================================================================
-
-
-
-    [HarmonyPatch(typeof(WeaponManager), "Awake")]
-    public static class MedusaSAMRadar2SinglePatch
+    [BvrFeature("MedusaSAMRadar2Single", ToggleField = nameof(Plugin.EnableMedusaSAMRadar2Single), Order = 212)]
+    public static class MedusaSAMRadar2SingleFeature
     {
-        private static bool hasPatched = false;
+        private const string FeatureId = "MedusaSAMRadar2Single";
 
-        public static void Prefix()
+        public static void Apply()
         {
-            if (!Plugin.EnableMedusaSAMRadar2Single.Value || hasPatched)
-                return;
-
-            WeaponMount singleMount = CustomWeaponsReusedAssets.GetExternalSAMRadar2Single();
-            if (singleMount == null)
-                return;
-
-            HardpointInjection.InjectWeaponMount(
+            HardpointFeatureHelper.Apply(
+                FeatureId,
+                CustomWeaponsReusedAssets.GetExternalSAMRadar2Single,
                 "EW1",
-                singleMount,
                 new[] { 3, 4 },
-                "MedusaSAMRadar2Single",
+                FeatureId,
                 "R9 Stratolance x1",
-                "hardpoint sets 3 and 4",
-                null);
-
-            hasPatched = true;
-            Debug.Log("[MedusaSAMRadar2Single] Master Prefab injection complete!");
+                "hardpoint sets 3 and 4");
         }
-    }
 
-
-
-    // ====================================================================================================
-    // MEDUSA SAM_RADAR2 DOUBLE (R9 STRATOLANCE x2)
-    // ====================================================================================================
-
-
-
-    [HarmonyPatch(typeof(WeaponManager), "Awake")]
-    public static class MedusaSAMRadar2DoublePatch
-    {
-        private static bool hasPatched = false;
-
-        public static void Prefix()
+        public static void Unapply()
         {
-            if (!Plugin.EnableMedusaSAMRadar2Double.Value || hasPatched)
-                return;
-
-            WeaponMount doubleMount = CustomWeaponsReusedAssets.GetExternalSAMRadar2Double();
-            if (doubleMount == null)
-                return;
-
-            HardpointInjection.InjectWeaponMount(
-                "EW1",
-                doubleMount,
-                new[] { 4 },
-                "MedusaSAMRadar2Double",
-                "R9 Stratolance x2",
-                "hardpoint set 4",
-                null);
-
-            hasPatched = true;
-            Debug.Log("[MedusaSAMRadar2Double] Master Prefab injection complete!");
+            HardpointFeatureHelper.Unapply(FeatureId, FeatureId);
         }
     }
 
+    [BvrFeature("MedusaSAMRadar2Double", ToggleField = nameof(Plugin.EnableMedusaSAMRadar2Double), Order = 213)]
+    public static class MedusaSAMRadar2DoubleFeature
+    {
+        private const string FeatureId = "MedusaSAMRadar2Double";
 
+        public static void Apply()
+        {
+            HardpointFeatureHelper.Apply(
+                FeatureId,
+                CustomWeaponsReusedAssets.GetExternalSAMRadar2Double,
+                "EW1",
+                new[] { 4 },
+                FeatureId,
+                "R9 Stratolance x2",
+                "hardpoint set 4");
+        }
 
+        public static void Unapply()
+        {
+            HardpointFeatureHelper.Unapply(FeatureId, FeatureId);
+        }
+    }
+
+    // ====================================================================================================
+    // NETWORK SEED HANDSHAKE - MIRAGE HOOKS
+    // Uses Mirage message handlers and NetworkManagerNuclearOption callbacks.
+    // No Update loops are used.
+    // ====================================================================================================
+    [NetworkMessage]
+    public struct BvrSeedRequestMessage
+    {
+        public byte ProtocolVersion;
+    }
+
+    [NetworkMessage]
+    public struct BvrSeedMessage
+    {
+        public string Payload;
+    }
+
+    // ====================================================================================================
+    // SERVER SIDE
+    // Registers the seed request handler when the server starts.
+    // ====================================================================================================
+    [HarmonyPatch(typeof(NetworkManagerNuclearOption), "OnServerStarted")]
+    public static class BVRServerSeedHandshakePatch
+    {
+        public static void Postfix(NetworkManagerNuclearOption __instance)
+        {
+            if (__instance == null)
+                return;
+
+            if (Plugin.MarkServerAsModded != null && Plugin.MarkServerAsModded.Value)
+            {
+                __instance.SetModdedServer(true);
+            }
+
+            if (__instance.Server == null || __instance.Server.MessageHandler == null)
+                return;
+
+            if (Plugin.EnableAutomaticSeedHandshake == null || !Plugin.EnableAutomaticSeedHandshake.Value)
+                return;
+
+            __instance.Server.MessageHandler.RegisterHandler<BvrSeedRequestMessage>(
+                new MessageDelegateWithPlayer<BvrSeedRequestMessage>(HandleSeedRequest),
+                true);
+
+            NetworkSeedHandshake.SetStatus("Server handshake ready");
+        }
+
+        private static void HandleSeedRequest(INetworkPlayer player, BvrSeedRequestMessage msg)
+        {
+            if (Plugin.EnableAutomaticSeedHandshake == null || !Plugin.EnableAutomaticSeedHandshake.Value)
+                return;
+
+            if (player == null || !player.IsConnected || !player.IsAuthenticated)
+                return;
+
+            // The host does not need to receive its own seed.
+            if (player.IsHost)
+                return;
+
+            string payload = NetworkSeedHandshake.BuildHostSeedMessage();
+
+            if (string.IsNullOrEmpty(payload))
+                return;
+
+            player.Send<BvrSeedMessage>(
+                new BvrSeedMessage
+                {
+                    Payload = payload
+                },
+                Channel.Reliable);
+
+            NetworkSeedHandshake.SetStatus("Host seed sent to client");
+        }
+    }
+
+    // ====================================================================================================
+    // CLIENT SIDE - RECEIVE SEED
+    // Registers the client handler for the host seed message.
+    // ====================================================================================================
+    [HarmonyPatch(typeof(NetworkManagerNuclearOption), "ClientStarted")]
+    public static class BVRClientSeedReceivePatch
+    {
+        public static void Postfix(NetworkManagerNuclearOption __instance)
+        {
+            if (__instance == null)
+                return;
+
+            if (__instance.Client == null || __instance.Client.MessageHandler == null)
+                return;
+
+            if (Plugin.EnableAutomaticSeedHandshake == null || !Plugin.EnableAutomaticSeedHandshake.Value)
+                return;
+
+            __instance.Client.MessageHandler.RegisterHandler<BvrSeedMessage>(
+                new MessageDelegateWithPlayer<BvrSeedMessage>(HandleHostSeedMessage),
+                true);
+
+            NetworkSeedHandshake.SetStatus("Client handshake ready");
+        }
+
+        private static void HandleHostSeedMessage(INetworkPlayer player, BvrSeedMessage msg)
+        {
+            NetworkSeedHandshake.OnHostSeedReceived(msg.Payload);
+        }
+    }
+
+    // ====================================================================================================
+    // CLIENT SIDE - REQUEST SEED
+    // Sends a seed request after the client is authenticated.
+    // ====================================================================================================
+    [HarmonyPatch(typeof(NetworkManagerNuclearOption), "OnClientAuthenticated")]
+    public static class BVRClientSeedRequestPatch
+    {
+        public static void Postfix(NetworkManagerNuclearOption __instance, INetworkPlayer player)
+        {
+            if (Plugin.EnableAutomaticSeedHandshake == null || !Plugin.EnableAutomaticSeedHandshake.Value)
+                return;
+
+            if (player == null || player.IsHost)
+                return;
+
+            if (__instance == null || __instance.Client == null || !__instance.Client.IsConnected)
+                return;
+
+            bool knownModdedServer = NetworkManagerNuclearOption.ModdedServer == true;
+
+            bool allowUnknownServers =
+                Plugin.AllowHandshakeRequestFromUnknownServers != null &&
+                Plugin.AllowHandshakeRequestFromUnknownServers.Value;
+
+            if (!knownModdedServer && !allowUnknownServers)
+            {
+                NetworkSeedHandshake.SetStatus("Seed request skipped: server not marked modded");
+                return;
+            }
+
+            __instance.Client.Send<BvrSeedRequestMessage>(
+                new BvrSeedRequestMessage
+                {
+                    ProtocolVersion = 1
+                },
+                Channel.Reliable);
+
+            NetworkSeedHandshake.SetStatus("Host seed requested");
+        }
+    }
 }

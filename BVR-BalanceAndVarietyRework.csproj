@@ -8,37 +8,46 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <LangVersion>latest</LangVersion>
 
-    <!-- Path to Nuclear Option Installation -->
+    <!-- Path to Nuclear Option Installation (MUST be defined before NuclearOptionManaged) -->
     <GamePath>X:\Installs\Games\SteamLibrary\steamapps\common\Nuclear Option</GamePath>
+    <NuclearOptionManaged>$(GamePath)\NuclearOption_Data\Managed</NuclearOptionManaged>
   </PropertyGroup>
 
   <!-- BepInEx and Game DLL References -->
   <ItemGroup>
     <Reference Include="Assembly-CSharp" Publicize="true">
-      <HintPath>$(GamePath)\NuclearOption_Data\Managed\Assembly-CSharp.dll</HintPath>
+      <HintPath>$(NuclearOptionManaged)\Assembly-CSharp.dll</HintPath>
       <Private>false</Private>
     </Reference>
 
     <Reference Include="UnityEngine">
-      <HintPath>$(GamePath)\NuclearOption_Data\Managed\UnityEngine.dll</HintPath>
+      <HintPath>$(NuclearOptionManaged)\UnityEngine.dll</HintPath>
       <Private>false</Private>
     </Reference>
 
     <Reference Include="UnityEngine.CoreModule">
-      <HintPath>$(GamePath)\NuclearOption_Data\Managed\UnityEngine.CoreModule.dll</HintPath>
+      <HintPath>$(NuclearOptionManaged)\UnityEngine.CoreModule.dll</HintPath>
       <Private>false</Private>
     </Reference>
 
     <Reference Include="UnityEngine.PhysicsModule">
-      <HintPath>$(GamePath)\NuclearOption_Data\Managed\UnityEngine.PhysicsModule.dll</HintPath>
+      <HintPath>$(NuclearOptionManaged)\UnityEngine.PhysicsModule.dll</HintPath>
       <Private>false</Private>
     </Reference>
 
+    <!-- Mirage Networking -->
     <Reference Include="Mirage">
-      <HintPath>$(GamePath)\NuclearOption_Data\Managed\Mirage.dll</HintPath>
+      <HintPath>$(NuclearOptionManaged)\Mirage.dll</HintPath>
       <Private>false</Private>
     </Reference>
 
+    <!-- REQUIRED: Mirage depends on this assembly for socket interfaces -->
+    <Reference Include="Mirage.SocketLayer">
+      <HintPath>$(NuclearOptionManaged)\Mirage.SocketLayer.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+
+    <!-- BepInEx & Harmony -->
     <Reference Include="BepInEx">
       <HintPath>$(GamePath)\BepInEx\core\BepInEx.dll</HintPath>
       <Private>false</Private>
