@@ -28,7 +28,7 @@ namespace BalanceAndVarietyRework
     [BepInPlugin("com.Draken0015.BVR", "Balance and Variety Rework", BaseVersion)]
     public class Plugin : BaseUnityPlugin
     {
-        public const string BaseVersion = "1.1.5";
+        public const string BaseVersion = "1.1.6";
 
         // Expose the dynamically generated version hash for multiplayer desync checks.
         public static string FullVersionWithHash { get; private set; }
@@ -74,6 +74,12 @@ namespace BalanceAndVarietyRework
         public static ConfigEntry<bool> EnableRAM45SARHRelock;
         public static ConfigEntry<float> RAM45SARHRelockDelay;
         public static ConfigEntry<int> RAM45SARHRelockAttempts;
+
+        // Cruise Missile Balance Entries
+        public static ConfigEntry<float> ALMC450RCS;
+        public static ConfigEntry<float> AGM99RCS;
+        public static ConfigEntry<float> AShM300RCS;
+        public static ConfigEntry<float> ALND420ktRCS;
 
         // Cricket Balance Entries
         public static ConfigEntry<bool> EnableCricketLynchpinx14Double;
@@ -215,29 +221,42 @@ namespace BalanceAndVarietyRework
         private void BindFunctionalConfigs()
         {
             // Missile Balance Changes
-            // IR Missiles Buff
-            EnableIRMissilesBuff = Config.Bind("Missile Balance Changes", "Enable IR Missiles Buff", true, "Master toggle to enable the custom flare rejection and flare count multipliers.");
-            FlareCountMultiplier = Config.Bind("Missile Balance Changes", "Flare Count Multiplier", 2.0f, "Multiplies the total number of flares on all aircraft (e.g., 2.0 = double flares, 0.5 = half flares).");
-            FlareRejectionMultiplier = Config.Bind("Missile Balance Changes", "Flare Rejection Multiplier", 2.0f, "Multiplies the flare rejection stat on all IR missiles. Higher values make them harder to decoy (e.g., 2.0 = double rejection).");
+            // BepInEx config sections cannot be truly nested. These section names are intentionally
+            // prefixed so they appear grouped under Missile Balance Changes in ConfigManager.
+            const string missileIRSection = "Missile Balance Changes - IR Balance Changes";
+            const string missileSARHSection = "Missile Balance Changes - SARH Balance Changes";
+            const string cruiseMissileSection = "Missile Balance Changes - Cruise Missile Balance Changes";
 
+            // IR Balance Changes
+            EnableIRMissilesBuff = Config.Bind(missileIRSection, "Enable IR Missiles Buff", true, "Master toggle to enable the custom flare rejection and flare count multipliers.");
+            FlareCountMultiplier = Config.Bind(missileIRSection, "Flare Count Multiplier", 2.0f, "Multiplies the total number of flares on all aircraft (e.g., 2.0 = double flares, 0.5 = half flares).");
+            FlareRejectionMultiplier = Config.Bind(missileIRSection, "Flare Rejection Multiplier", 2.0f, "Multiplies the flare rejection stat on all IR missiles. Higher values make them harder to decoy (e.g., 2.0 = double rejection).");
+
+            // SARH Balance Changes
             // R9 Lock Persistence Change
-            EnableR9LockPersistenceBuff = Config.Bind("Missile Balance Changes", "Enable R9 Lock Persistence Buff", true, "Master toggle to enable the custom R9 lock persistence value.");
-            R9LockPersistenceValue = Config.Bind("Missile Balance Changes", "R9 Lock Persistence Value", 3.0f, "Sets the lock persistence duration for the R9's SARH seeker, measured in seconds. Higher values keep the lock active for longer after the target successfully jams or is obscured. 600 effectively makes it relock infinitely.");
+            EnableR9LockPersistenceBuff = Config.Bind(missileSARHSection, "Enable R9 Lock Persistence Buff", true, "Master toggle to enable the custom R9 lock persistence value.");
+            R9LockPersistenceValue = Config.Bind(missileSARHSection, "R9 Lock Persistence Value", 3.0f, "Sets the lock persistence duration for the R9's SARH seeker, measured in seconds. Higher values keep the lock active for longer after the target successfully jams or is obscured. 600 effectively makes it relock infinitely.");
 
             // RAM45 Lock Persistence Change
-            EnableRAM45LockPersistenceBuff = Config.Bind("Missile Balance Changes", "Enable RAM45 Lock Persistence Buff", true, "Master toggle to enable the custom RAM45 lock persistence value.");
-            RAM45LockPersistenceValue = Config.Bind("Missile Balance Changes", "RAM45 Lock Persistence Value", 3.0f, "Sets the lock persistence duration for the RAM45's SARH seeker, measured in seconds. Higher values keep the lock active for longer after the target successfully jams or is obscured. 600 effectively makes it relock infinitely.");
+            EnableRAM45LockPersistenceBuff = Config.Bind(missileSARHSection, "Enable RAM45 Lock Persistence Buff", true, "Master toggle to enable the custom RAM45 lock persistence value.");
+            RAM45LockPersistenceValue = Config.Bind(missileSARHSection, "RAM45 Lock Persistence Value", 3.0f, "Sets the lock persistence duration for the RAM45's SARH seeker, measured in seconds. Higher values keep the lock active for longer after the target successfully jams or is obscured. 600 effectively makes it relock infinitely.");
 
             // R9 SARH Relock Change
-            EnableR9SARHRelock = Config.Bind("Missile Balance Changes", "Enable R9 SARH Relock", true, "Master toggle to enable automatic R9 SARH relock attempts after lockPersistence allows the seeker to drop its target.");
-            R9SARHRelockDelay = Config.Bind("Missile Balance Changes", "R9 SARH Relock Delay", 3.0f, "Seconds the R9 waits after it is left without a lock before attempting to relock. This timer starts after lockPersistence expires.");
-            R9SARHRelockAttempts = Config.Bind("Missile Balance Changes", "R9 SARH Relock Attempts", 0, "Number of R9 relock attempts. 0 = infinite attempts.");
+            EnableR9SARHRelock = Config.Bind(missileSARHSection, "Enable R9 SARH Relock", true, "Master toggle to enable automatic R9 SARH relock attempts after lockPersistence allows the seeker to drop its target.");
+            R9SARHRelockDelay = Config.Bind(missileSARHSection, "R9 SARH Relock Delay", 3.0f, "Seconds the R9 waits after it is left without a lock before attempting to relock. This timer starts after lockPersistence expires.");
+            R9SARHRelockAttempts = Config.Bind(missileSARHSection, "R9 SARH Relock Attempts", 0, "Number of R9 relock attempts. 0 = infinite attempts.");
 
             // RAM45 SARH Relock Change
-            EnableRAM45SARHRelock = Config.Bind("Missile Balance Changes", "Enable RAM45 SARH Relock", true, "Master toggle to enable automatic RAM45 SARH relock attempts after lockPersistence allows the seeker to drop its target.");
-            RAM45SARHRelockDelay = Config.Bind("Missile Balance Changes", "RAM45 SARH Relock Delay", 3.0f, "Seconds the RAM45 waits after it is left without a lock before attempting to relock. This timer starts after lockPersistence expires.");
-            RAM45SARHRelockAttempts = Config.Bind("Missile Balance Changes", "RAM45 SARH Relock Attempts", 0, "Number of RAM45 relock attempts. 0 = infinite attempts.");
+            EnableRAM45SARHRelock = Config.Bind(missileSARHSection, "Enable RAM45 SARH Relock", true, "Master toggle to enable automatic RAM45 SARH relock attempts after lockPersistence allows the seeker to drop its target.");
+            RAM45SARHRelockDelay = Config.Bind(missileSARHSection, "RAM45 SARH Relock Delay", 3.0f, "Seconds the RAM45 waits after it is left without a lock before attempting to relock. This timer starts after lockPersistence expires.");
+            RAM45SARHRelockAttempts = Config.Bind(missileSARHSection, "RAM45 SARH Relock Attempts", 0, "Number of RAM45 relock attempts. 0 = infinite attempts.");
 
+            // Cruise Missile Balance Changes
+            ALMC450RCS = Config.Bind(cruiseMissileSection, "ALM-C450 RCS", 0.005f, "Sets the Radar Cross Section (RCS) of the ALM-C450 cruise missile. Higher values make the missile easier for radar to detect and track. Vanilla is 0.005.");
+            AGM99RCS = Config.Bind(cruiseMissileSection, "AGM-99 RCS", 0.008f, "Sets the Radar Cross Section (RCS) of the AGM-99 anti-radiation missile. Higher values make the missile easier for radar to detect and track. Vanilla is 0.008.");
+            AShM300RCS = Config.Bind(cruiseMissileSection, "AShM-300 RCS", 0.005f, "Sets the Radar Cross Section (RCS) of the AShM-300 anti-ship missile. Higher values make the missile easier for radar to detect and track. Vanilla is 0.005.");
+            ALND420ktRCS = Config.Bind(cruiseMissileSection, "ALND-4 (20kt) RCS", 0.005f, "Sets the Radar Cross Section (RCS) of the ALND-4 20kt cruise missile. Higher values make the missile easier for radar to detect and track. Vanilla is 0.005.");
+            
             // Cricket Changes
             EnableCricketLynchpinx14Double = Config.Bind("CI-22 Cricket Changes", "Enable Cricket Lynchpin x14 Double", true, "Enables the AGR-18 Lynchpin x14 double rocket pod on the Cricket's hardpoint sets 2 and 3.");
             EnableCricketKingpinx8Double = Config.Bind("CI-22 Cricket Changes", "Enable Cricket Kingpin x8 Double", true, "Enables the AGR-24 Kingpin x8 double rocket pod on the Cricket's hardpoint sets 2 and 3.");
@@ -334,6 +353,7 @@ namespace BalanceAndVarietyRework
                 typeof(StatsPatch),
                 typeof(SARHLockPersistencePatch),
                 typeof(SARHRelockPatch),
+                typeof(CruiseMissileRCSPatch),
 
                 // Cricket changes
                 typeof(CricketLynchpinx14DoublePatch),
@@ -2182,6 +2202,143 @@ namespace BalanceAndVarietyRework
             }
 
             return false;
+        }
+    }
+
+
+
+    // ====================================================================================================
+    // CRUISE MISSILE RCS
+    // ====================================================================================================
+    [HarmonyPatch(typeof(WeaponManager), "Awake")]
+    public static class CruiseMissileRCSPatch
+    {
+        private static bool hasPatched = false;
+
+        public static void Prefix()
+        {
+            if (hasPatched)
+                return;
+
+            bool patchedAny = false;
+
+            patchedAny |= TrySetCruiseMissileRadarSize("CruiseMissile1", Mathf.Max(0f, Plugin.ALMC450RCS.Value), "ALM-C450 RCS");
+            patchedAny |= TrySetCruiseMissileRadarSize("AShM2", Mathf.Max(0f, Plugin.AGM99RCS.Value), "AGM-99 RCS");
+            patchedAny |= TrySetCruiseMissileRadarSize("AShM1", Mathf.Max(0f, Plugin.AShM300RCS.Value), "AShM-300 RCS");
+            patchedAny |= TrySetCruiseMissileRadarSize("CruiseMissile20kt", Mathf.Max(0f, Plugin.ALND420ktRCS.Value), "ALND-4 (20kt) RCS");
+
+            hasPatched = true;
+
+            if (patchedAny)
+                Debug.Log("[CruiseMissileRCS] Master Prefab sweep complete!");
+        }
+
+        private static bool TrySetCruiseMissileRadarSize(string definitionName, float radarSize, string logTag)
+        {
+            bool success = false;
+
+            MissileDefinition[] definitions = Resources.FindObjectsOfTypeAll<MissileDefinition>();
+            foreach (MissileDefinition definition in definitions)
+            {
+                if (definition == null)
+                    continue;
+
+                string cleanName = ObjectNameUtility.RemoveCloneSuffix(definition.name);
+                if (!string.Equals(cleanName, definitionName, StringComparison.Ordinal))
+                    continue;
+
+                if (TrySetRadarSize(definition, radarSize, 0))
+                {
+                    success = true;
+                    Debug.Log($"[{logTag}] Successfully set radarSize={radarSize.ToString("0.000000", CultureInfo.InvariantCulture)} on {definition.name}.");
+                }
+            }
+
+            if (!success)
+                Debug.LogWarning($"[{logTag}] Could not find UnitDefinition.radarSize on {definitionName}.");
+
+            return success;
+        }
+
+        private static bool TrySetRadarSize(object target, float value, int depth)
+        {
+            if (target == null || depth > 2)
+                return false;
+
+            try
+            {
+                Traverse traverse = Traverse.Create(target);
+
+                // Preferred path: radarSize is directly exposed on the MissileDefinition or inherited UnitDefinition.
+                Traverse radarField = traverse.Field("radarSize");
+                if (radarField.FieldExists())
+                {
+                    radarField.SetValue(value);
+                    return true;
+                }
+
+                Traverse radarProperty = traverse.Property("radarSize");
+                if (radarProperty.PropertyExists())
+                {
+                    radarProperty.SetValue(value);
+                    return true;
+                }
+
+                // Fallback path: MissileDefinition contains a UnitDefinition object.
+                foreach (string memberName in new[] { "unitDefinition", "unit", "definition", "def" })
+                {
+                    object nested = GetMemberValue(traverse, memberName);
+                    if (nested != null && !ReferenceEquals(nested, target) && TrySetRadarSize(nested, value, depth + 1))
+                        return true;
+                }
+
+                // Final fallback: search inherited fields/properties for a UnitDefinition member.
+                Type type = target.GetType();
+                for (Type currentType = type; currentType != null && currentType != typeof(object); currentType = currentType.BaseType)
+                {
+                    foreach (FieldInfo fieldInfo in currentType.GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
+                    {
+                        if (fieldInfo.FieldType == null || !fieldInfo.FieldType.Name.Contains("UnitDefinition"))
+                            continue;
+
+                        object nested = fieldInfo.GetValue(target);
+                        if (nested != null && !ReferenceEquals(nested, target) && TrySetRadarSize(nested, value, depth + 1))
+                            return true;
+                    }
+
+                    foreach (PropertyInfo propertyInfo in currentType.GetProperties(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
+                    {
+                        if (propertyInfo.PropertyType == null || !propertyInfo.CanRead || propertyInfo.GetIndexParameters().Length > 0)
+                            continue;
+
+                        if (!propertyInfo.PropertyType.Name.Contains("UnitDefinition"))
+                            continue;
+
+                        object nested = propertyInfo.GetValue(target);
+                        if (nested != null && !ReferenceEquals(nested, target) && TrySetRadarSize(nested, value, depth + 1))
+                            return true;
+                    }
+                }
+            }
+            catch
+            {
+                // If a nested definition cannot be traversed, fall through and report failure upstream.
+            }
+
+            return false;
+        }
+
+        private static object GetMemberValue(Traverse traverse, string memberName)
+        {
+            Traverse field = traverse.Field(memberName);
+            if (field.FieldExists())
+                return field.GetValue();
+
+            Traverse property = traverse.Property(memberName);
+            if (property.PropertyExists())
+                return property.GetValue();
+
+            return null;
         }
     }
 
