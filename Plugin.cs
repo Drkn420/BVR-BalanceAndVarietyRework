@@ -126,6 +126,7 @@ namespace BalanceAndVarietyRework
         public static ConfigEntry<float> MedusaLaserPowerDraw;
         public static ConfigEntry<bool> EnableMedusaLynchpinx14Double;
         public static ConfigEntry<bool> EnableMedusaKingpinx8Double;
+        public static ConfigEntry<bool> EnableMedusaSAMRadar1Single;
         public static ConfigEntry<bool> EnableMedusaSAMRadar2Single;
         public static ConfigEntry<bool> EnableMedusaSAMRadar2Double;
 
@@ -252,10 +253,10 @@ namespace BalanceAndVarietyRework
             RAM45SARHRelockAttempts = Config.Bind(missileSARHSection, "RAM45 SARH Relock Attempts", 0, "Number of RAM45 relock attempts. 0 = infinite attempts.");
 
             // Cruise Missile Balance Changes
-            ALMC450RCS = Config.Bind(cruiseMissileSection, "ALM-C450 RCS", 0.005f, "Sets the Radar Cross Section (RCS) of the ALM-C450 cruise missile. Higher values make the missile easier for radar to detect and track. Vanilla is 0.005.");
+            ALMC450RCS = Config.Bind(cruiseMissileSection, "ALM-C450 RCS", 0.0005f, "Sets the Radar Cross Section (RCS) of the ALM-C450 cruise missile. Higher values make the missile easier for radar to detect and track. Vanilla is 0.005.");
             AGM99RCS = Config.Bind(cruiseMissileSection, "AGM-99 RCS", 0.008f, "Sets the Radar Cross Section (RCS) of the AGM-99 anti-radiation missile. Higher values make the missile easier for radar to detect and track. Vanilla is 0.008.");
             AShM300RCS = Config.Bind(cruiseMissileSection, "AShM-300 RCS", 0.005f, "Sets the Radar Cross Section (RCS) of the AShM-300 anti-ship missile. Higher values make the missile easier for radar to detect and track. Vanilla is 0.005.");
-            ALND420ktRCS = Config.Bind(cruiseMissileSection, "ALND-4 (20kt) RCS", 0.005f, "Sets the Radar Cross Section (RCS) of the ALND-4 20kt cruise missile. Higher values make the missile easier for radar to detect and track. Vanilla is 0.005.");
+            ALND420ktRCS = Config.Bind(cruiseMissileSection, "ALND-4 (20kt) RCS", 0.001f, "Sets the Radar Cross Section (RCS) of the ALND-4 20kt cruise missile. Higher values make the missile easier for radar to detect and track. Vanilla is 0.005.");
             
             // Cricket Changes
             EnableCricketLynchpinx14Double = Config.Bind("CI-22 Cricket Changes", "Enable Cricket Lynchpin x14 Double", true, "Enables the AGR-18 Lynchpin x14 double rocket pod on the Cricket's hardpoint sets 2 and 3.");
@@ -302,8 +303,9 @@ namespace BalanceAndVarietyRework
             MedusaLaserPowerDraw = Config.Bind("EW-25 Medusa Changes", "Medusa Laser Power Draw Value", 60.0f, "Sets the power draw of the Medusa's laser. (Vanilla is 120).");
             EnableMedusaLynchpinx14Double = Config.Bind("EW-25 Medusa Changes", "Enable Medusa Lynchpin x14 Double", true, "Enables the AGR-18 Lynchpin x14 double rocket pod on the Medusa's hardpoint set 3.");
             EnableMedusaKingpinx8Double = Config.Bind("EW-25 Medusa Changes", "Enable Medusa Kingpin x8 Double", true, "Enables the AGR-24 Kingpin x8 double rocket pod on the Medusa's hardpoint set 3.");
+            EnableMedusaSAMRadar1Single = Config.Bind("EW-25 Medusa Changes", "Enable Medusa RAM-45 x1", true, "Enables the RAM-45 x1 mount on the Medusa's hardpoint sets 3 and 4.");
             EnableMedusaSAMRadar2Single = Config.Bind("EW-25 Medusa Changes", "Enable Medusa R9 Stratolance x1", true, "Enables the R9 Stratolance x1 mount on the Medusa's hardpoint sets 3 and 4.");
-            EnableMedusaSAMRadar2Double = Config.Bind("EW-25 Medusa Changes", "Enable Medusa R9 Stratolance x2", true, "Enables the R9 Stratolance x2 mount on the Medusa's hardpoint set 4.");
+            EnableMedusaSAMRadar2Double = Config.Bind("EW-25 Medusa Changes", "Enable Medusa R9 Stratolance x2", true, "Enables the R9 Stratolance x2 mount on the Medusa's hardpoint sets 3 and 4.");
         }
 
 
@@ -398,6 +400,7 @@ namespace BalanceAndVarietyRework
                 typeof(MedusaLaserPatch),
                 typeof(MedusaLynchpinx14DoublePatch),
                 typeof(MedusaKingpinx8DoublePatch),
+                typeof(MedusaSAMRadar1SinglePatch),
                 typeof(MedusaSAMRadar2SinglePatch),
                 typeof(MedusaSAMRadar2DoublePatch)
             };
@@ -818,6 +821,7 @@ namespace BalanceAndVarietyRework
 
     internal static class CustomWeaponsReusedAssets
     {
+        private static WeaponMount externalSAMRadar1SingleMount;
         private static WeaponMount externalSAMRadar2SingleMount;
         private static WeaponMount externalSAMRadar2DoubleMount;
         private static WeaponMount externalLynchpinx14DoubleMount;
@@ -839,6 +843,53 @@ namespace BalanceAndVarietyRework
 
 
 
+        public static WeaponMount GetExternalSAMRadar1Single()
+        {
+            if (externalSAMRadar1SingleMount != null)
+                return externalSAMRadar1SingleMount;
+
+            WeaponMount sourceMount = FindSourceMount("AAM4_single", "AAM4_single", null);
+            if (sourceMount == null)
+                return null;
+
+            GameObject singlePrefab = ClonePrefabToVault(sourceMount.prefab, "SAM_Radar1_single");
+            GameObject originalSamPrefab = FindOriginalSamRadar1Prefab();
+
+            if (originalSamPrefab != null)
+            {
+                Transform pylon = singlePrefab.transform.Find("pylon");
+                Vector3 pylonLocalPosition = new Vector3(0f, -0.09f, 0.03f);
+                Vector3 pylonLocalEulerAngles = Vector3.zero;
+                Vector3 pylonLocalScale = Vector3.zero;
+
+                ApplyDefaultLocalTransform(pylon, pylonLocalPosition, pylonLocalEulerAngles, pylonLocalScale);
+
+                Transform missileChild = pylon != null ? pylon.Find("aam4") : null;
+                if (missileChild != null)
+                {
+                    Vector3 missileLocalPosition = new Vector3(0f, -0.19f, -0.1f);
+                    Vector3 missileLocalEulerAngles = new Vector3(0f, 0f, 45f);
+                    Vector3 missileLocalScale = Vector3.zero;
+
+                    missileChild.name = "sam_radar1";
+                    SwapMissileVisualsAndCollider(missileChild, originalSamPrefab, false, false);
+                    ApplyDefaultLocalTransform(missileChild, missileLocalPosition, missileLocalEulerAngles, missileLocalScale);
+                }
+            }
+            else
+            {
+                Debug.LogWarning("[ExternalSAMRadar1Single] Could not find original 'SAM_Radar1' prefab in resources to copy mesh and collider!");
+            }
+
+            AssignWeaponInfo(singlePrefab, "info_SAM_Radar1", "MountedMissile");
+
+            externalSAMRadar1SingleMount = CreateConfiguredMount(sourceMount, singlePrefab, "RAM-45 x1", "SAM_Radar1_single");
+            Debug.Log("[ExternalSAMRadar1Single] Custom RAM-45 x1 prefab and mount generation complete!");
+            return externalSAMRadar1SingleMount;
+        }
+
+
+
         public static WeaponMount GetExternalSAMRadar2Single()
         {
             if (externalSAMRadar2SingleMount != null)
@@ -854,12 +905,23 @@ namespace BalanceAndVarietyRework
             if (originalSamPrefab != null)
             {
                 Transform pylon = singlePrefab.transform.Find("pylon");
+                Vector3 pylonLocalPosition = new Vector3(0f, -0.09f, 0.03f);
+                Vector3 pylonLocalEulerAngles = Vector3.zero;
+                Vector3 pylonLocalScale = Vector3.zero;
+
+                ApplyDefaultLocalTransform(pylon, pylonLocalPosition, pylonLocalEulerAngles, pylonLocalScale);
+
                 Transform missileChild = pylon != null ? pylon.Find("aam4") : null;
 
                 if (missileChild != null)
                 {
+                    Vector3 missileLocalPosition = Vector3.zero;
+                    Vector3 missileLocalEulerAngles = Vector3.zero;
+                    Vector3 missileLocalScale = Vector3.zero;
+
                     missileChild.name = "sam_radar2";
                     SwapMissileVisualsAndCollider(missileChild, originalSamPrefab, false, false);
+                    ApplyDefaultLocalTransform(missileChild, missileLocalPosition, missileLocalEulerAngles, missileLocalScale);
                 }
             }
             else
@@ -906,12 +968,23 @@ namespace BalanceAndVarietyRework
                     if (child.name != "pylon")
                         continue;
 
+                    Vector3 pylonLocalPosition = Vector3.zero;
+                    Vector3 pylonLocalEulerAngles = Vector3.zero;
+                    Vector3 pylonLocalScale = Vector3.zero;
+
+                    ApplyDefaultLocalTransform(child, pylonLocalPosition, pylonLocalEulerAngles, pylonLocalScale);
+
                     Transform missileChild = child.Find("ARM1");
                     if (missileChild == null)
                         continue;
 
+                    Vector3 missileLocalPosition = Vector3.zero;
+                    Vector3 missileLocalEulerAngles = Vector3.zero;
+                    Vector3 missileLocalScale = Vector3.zero;
+
                     missileChild.name = "sam_radar2";
                     SwapMissileVisualsAndCollider(missileChild, originalSamPrefab, true, true);
+                    ApplyDefaultLocalTransform(missileChild, missileLocalPosition, missileLocalEulerAngles, missileLocalScale);
                     swappedMissiles++;
                 }
 
@@ -945,19 +1018,37 @@ namespace BalanceAndVarietyRework
                 return null;
 
             GameObject doublePrefab = ClonePrefabToVault(sourceMount.prefab, "RocketPod1_double");
-            doublePrefab.transform.localPosition = Vector3.zero;
+            Vector3 prefabLocalPosition = Vector3.zero;
+            Vector3 prefabLocalEulerAngles = Vector3.zero;
+            Vector3 prefabLocalScale = Vector3.zero;
+
+            ApplyExactLocalTransform(doublePrefab.transform, prefabLocalPosition, prefabLocalEulerAngles, prefabLocalScale);
 
             Transform firstPod = doublePrefab.transform.Find("pod");
             if (firstPod != null)
             {
-                firstPod.localPosition = new Vector3(0.13f, -0.15f, 0.19f);
-                firstPod.localEulerAngles = Vector3.zero;
+                Vector3 firstPodLocalPosition = new Vector3(0.13f, -0.15f, 0.19f);
+                Vector3 firstPodLocalEulerAngles = Vector3.zero;
+                Vector3 firstPodLocalScale = Vector3.zero;
+
+                ApplyExactLocalTransform(firstPod, firstPodLocalPosition, firstPodLocalEulerAngles, firstPodLocalScale);
 
                 Transform secondPod = UnityEngine.Object.Instantiate(firstPod.gameObject, doublePrefab.transform).transform;
                 secondPod.name = "pod";
-                secondPod.localPosition = new Vector3(-0.13f, -0.15f, 0.19f);
-                secondPod.localEulerAngles = Vector3.zero;
+
+                Vector3 secondPodLocalPosition = new Vector3(-0.13f, -0.15f, 0.19f);
+                Vector3 secondPodLocalEulerAngles = Vector3.zero;
+                Vector3 secondPodLocalScale = Vector3.zero;
+
+                ApplyExactLocalTransform(secondPod, secondPodLocalPosition, secondPodLocalEulerAngles, secondPodLocalScale);
             }
+
+            Transform pylon = doublePrefab.transform.Find("pylon");
+            Vector3 pylonLocalPosition = Vector3.zero;
+            Vector3 pylonLocalEulerAngles = Vector3.zero;
+            Vector3 pylonLocalScale = Vector3.zero;
+
+            ApplyDefaultLocalTransform(pylon, pylonLocalPosition, pylonLocalEulerAngles, pylonLocalScale);
 
             externalLynchpinx14DoubleMount = CreateConfiguredMount(sourceMount, doublePrefab, "AGR-18 Lynchpin x14", "RocketPod1_double");
             Debug.Log("[ExternalLynchpinx14Double] Custom double Lynchpin prefab and mount generation complete!");
@@ -977,18 +1068,29 @@ namespace BalanceAndVarietyRework
                 return null;
 
             GameObject doublePrefab = ClonePrefabToVault(sourceMount.prefab, "Rocket2_4Podx2");
-            doublePrefab.transform.localPosition = new Vector3(0f, -0.1f, 0f);
+            Vector3 prefabLocalPosition = new Vector3(0f, -0.1f, 0f);
+            Vector3 prefabLocalEulerAngles = Vector3.zero;
+            Vector3 prefabLocalScale = Vector3.zero;
+
+            ApplyExactLocalTransform(doublePrefab.transform, prefabLocalPosition, prefabLocalEulerAngles, prefabLocalScale);
 
             Transform firstPod = doublePrefab.transform.Find("pod");
             if (firstPod != null)
             {
-                firstPod.localPosition = new Vector3(0.14f, -0.15f, -0.005f);
-                firstPod.localEulerAngles = new Vector3(0f, 0f, 45f);
+                Vector3 firstPodLocalPosition = new Vector3(0.14f, -0.15f, -0.005f);
+                Vector3 firstPodLocalEulerAngles = new Vector3(0f, 0f, 45f);
+                Vector3 firstPodLocalScale = Vector3.zero;
+
+                ApplyExactLocalTransform(firstPod, firstPodLocalPosition, firstPodLocalEulerAngles, firstPodLocalScale);
 
                 Transform secondPod = UnityEngine.Object.Instantiate(firstPod.gameObject, doublePrefab.transform).transform;
                 secondPod.name = "pod";
-                secondPod.localPosition = new Vector3(-0.14f, -0.15f, -0.005f);
-                secondPod.localEulerAngles = new Vector3(0f, 0f, -45f);
+
+                Vector3 secondPodLocalPosition = new Vector3(-0.14f, -0.15f, -0.005f);
+                Vector3 secondPodLocalEulerAngles = new Vector3(0f, 0f, -45f);
+                Vector3 secondPodLocalScale = Vector3.zero;
+
+                ApplyExactLocalTransform(secondPod, secondPodLocalPosition, secondPodLocalEulerAngles, secondPodLocalScale);
 
                 // Fix livery inheritance for the cloned pod.
                 MirrorColorableMountToClonedPod(doublePrefab, firstPod.gameObject, secondPod.gameObject);
@@ -996,10 +1098,11 @@ namespace BalanceAndVarietyRework
 
             // Reposition the pylon child to correct alignment.
             Transform pylon = doublePrefab.transform.Find("pylon");
-            if (pylon != null)
-            {
-                pylon.localPosition = new Vector3(0f, 0.038f, 0f);
-            }
+            Vector3 pylonLocalPosition = new Vector3(0f, 0.038f, 0f);
+            Vector3 pylonLocalEulerAngles = Vector3.zero;
+            Vector3 pylonLocalScale = Vector3.zero;
+
+            ApplyExactLocalTransform(pylon, pylonLocalPosition, pylonLocalEulerAngles, pylonLocalScale);
 
             externalKingpinx8DoubleMount = CreateConfiguredMount(sourceMount, doublePrefab, "AGR-24 Kingpin x8", "Rocket2_4Podx2");
             Debug.Log("[ExternalKingpinx8Double] Custom double Kingpin prefab and mount generation complete!");
@@ -1019,19 +1122,37 @@ namespace BalanceAndVarietyRework
                 return null;
 
             GameObject doublePrefab = ClonePrefabToVault(sourceMount.prefab, "RocketPod1_double_internal");
-            doublePrefab.transform.localPosition = new Vector3(0f, -0.05f, 0f);
+            Vector3 prefabLocalPosition = new Vector3(0f, -0.05f, 0f);
+            Vector3 prefabLocalEulerAngles = Vector3.zero;
+            Vector3 prefabLocalScale = Vector3.zero;
+
+            ApplyExactLocalTransform(doublePrefab.transform, prefabLocalPosition, prefabLocalEulerAngles, prefabLocalScale);
 
             Transform firstPod = doublePrefab.transform.Find("pod");
             if (firstPod != null)
             {
-                firstPod.localPosition = new Vector3(0.13f, -0.15f, 0.19f);
-                firstPod.localEulerAngles = Vector3.zero;
+                Vector3 firstPodLocalPosition = new Vector3(0.13f, -0.15f, 0.19f);
+                Vector3 firstPodLocalEulerAngles = Vector3.zero;
+                Vector3 firstPodLocalScale = Vector3.zero;
+
+                ApplyExactLocalTransform(firstPod, firstPodLocalPosition, firstPodLocalEulerAngles, firstPodLocalScale);
 
                 Transform secondPod = UnityEngine.Object.Instantiate(firstPod.gameObject, doublePrefab.transform).transform;
                 secondPod.name = "pod";
-                secondPod.localPosition = new Vector3(-0.13f, -0.15f, 0.19f);
-                secondPod.localEulerAngles = Vector3.zero;
+
+                Vector3 secondPodLocalPosition = new Vector3(-0.13f, -0.15f, 0.19f);
+                Vector3 secondPodLocalEulerAngles = Vector3.zero;
+                Vector3 secondPodLocalScale = Vector3.zero;
+
+                ApplyExactLocalTransform(secondPod, secondPodLocalPosition, secondPodLocalEulerAngles, secondPodLocalScale);
             }
+
+            Transform pylon = doublePrefab.transform.Find("pylon");
+            Vector3 pylonLocalPosition = Vector3.zero;
+            Vector3 pylonLocalEulerAngles = Vector3.zero;
+            Vector3 pylonLocalScale = Vector3.zero;
+
+            ApplyDefaultLocalTransform(pylon, pylonLocalPosition, pylonLocalEulerAngles, pylonLocalScale);
 
             // Force MountedMissile.railDelay on all rockets inside both pods.
             // This affects the prefab itself, so later spawned clones inherit the modified value.
@@ -1057,18 +1178,29 @@ namespace BalanceAndVarietyRework
                 return null;
 
             GameObject doublePrefab = ClonePrefabToVault(sourceMount.prefab, "Rocket2_4Podx2_internal");
-            doublePrefab.transform.localPosition = new Vector3(0f, -0.11f, 0.13f);
+            Vector3 prefabLocalPosition = new Vector3(0f, -0.11f, 0.13f);
+            Vector3 prefabLocalEulerAngles = Vector3.zero;
+            Vector3 prefabLocalScale = Vector3.zero;
+
+            ApplyExactLocalTransform(doublePrefab.transform, prefabLocalPosition, prefabLocalEulerAngles, prefabLocalScale);
 
             Transform firstPod = doublePrefab.transform.Find("pod");
             if (firstPod != null)
             {
-                firstPod.localPosition = new Vector3(0.14f, -0.15f, -0.005f);
-                firstPod.localEulerAngles = new Vector3(0f, 0f, 45f);
+                Vector3 firstPodLocalPosition = new Vector3(0.14f, -0.15f, -0.005f);
+                Vector3 firstPodLocalEulerAngles = new Vector3(0f, 0f, 45f);
+                Vector3 firstPodLocalScale = Vector3.zero;
+
+                ApplyExactLocalTransform(firstPod, firstPodLocalPosition, firstPodLocalEulerAngles, firstPodLocalScale);
 
                 Transform secondPod = UnityEngine.Object.Instantiate(firstPod.gameObject, doublePrefab.transform).transform;
                 secondPod.name = "pod";
-                secondPod.localPosition = new Vector3(-0.14f, -0.15f, -0.005f);
-                secondPod.localEulerAngles = new Vector3(0f, 0f, -45f);
+
+                Vector3 secondPodLocalPosition = new Vector3(-0.14f, -0.15f, -0.005f);
+                Vector3 secondPodLocalEulerAngles = new Vector3(0f, 0f, -45f);
+                Vector3 secondPodLocalScale = Vector3.zero;
+
+                ApplyExactLocalTransform(secondPod, secondPodLocalPosition, secondPodLocalEulerAngles, secondPodLocalScale);
 
                 // Fix livery inheritance for the cloned pod.
                 MirrorColorableMountToClonedPod(doublePrefab, firstPod.gameObject, secondPod.gameObject);
@@ -1076,10 +1208,11 @@ namespace BalanceAndVarietyRework
 
             // Reposition the pylon child to correct internal bay alignment.
             Transform pylon = doublePrefab.transform.Find("pylon");
-            if (pylon != null)
-            {
-                pylon.localPosition = new Vector3(0f, 0.038f, 0f);
-            }
+            Vector3 pylonLocalPosition = new Vector3(0f, 0.038f, 0f);
+            Vector3 pylonLocalEulerAngles = Vector3.zero;
+            Vector3 pylonLocalScale = Vector3.zero;
+
+            ApplyExactLocalTransform(pylon, pylonLocalPosition, pylonLocalEulerAngles, pylonLocalScale);
 
             // Force MountedMissile.railDelay on all rockets inside both pods.
             // The Kingpin pod contains rocket1 through rocket4, but this sweep catches all MountedMissile components automatically.
@@ -1098,6 +1231,43 @@ namespace BalanceAndVarietyRework
         // ================================================================================================
         // MOUNT / PREFAB CREATION HELPERS
         // ================================================================================================
+
+
+
+        // ================================================================================================
+        // LOCAL TRANSFORM HELPERS
+        // ================================================================================================
+
+
+
+        private static void ApplyExactLocalTransform(Transform target, Vector3 localPosition, Vector3 localEulerAngles, Vector3 localScale)
+        {
+            if (target == null)
+                return;
+
+            target.localPosition = localPosition;
+            target.localEulerAngles = localEulerAngles;
+
+            if (localScale != Vector3.zero)
+                target.localScale = localScale;
+        }
+
+
+
+        private static void ApplyDefaultLocalTransform(Transform target, Vector3 localPosition, Vector3 localEulerAngles, Vector3 localScale)
+        {
+            if (target == null)
+                return;
+
+            if (localPosition != Vector3.zero)
+                target.localPosition = localPosition;
+
+            if (localEulerAngles != Vector3.zero)
+                target.localEulerAngles = localEulerAngles;
+
+            if (localScale != Vector3.zero)
+                target.localScale = localScale;
+        }
 
 
 
@@ -1222,6 +1392,17 @@ namespace BalanceAndVarietyRework
 
                 return (int)(hash & 0x7fffffff);
             }
+        }
+
+
+
+        private static GameObject FindOriginalSamRadar1Prefab()
+        {
+            GameObject[] allGameObjects = Resources.FindObjectsOfTypeAll<GameObject>();
+            return allGameObjects.FirstOrDefault(go =>
+                go != null &&
+                go.name == "SAM_Radar1" &&
+                go.transform.parent == null);
         }
 
 
@@ -3337,6 +3518,39 @@ namespace BalanceAndVarietyRework
 
 
     // ====================================================================================================
+    // MEDUSA SAM_RADAR1 SINGLE (RAM-45 x1)
+    // ====================================================================================================
+    [HarmonyPatch(typeof(WeaponManager), "Awake")]
+    public static class MedusaSAMRadar1SinglePatch
+    {
+        private static bool hasPatched = false;
+
+        public static void Prefix()
+        {
+            if (!Plugin.EnableMedusaSAMRadar1Single.Value || hasPatched)
+                return;
+
+            WeaponMount singleMount = CustomWeaponsReusedAssets.GetExternalSAMRadar1Single();
+            if (singleMount == null)
+                return;
+
+            HardpointInjection.InjectWeaponMount(
+                "EW1",
+                singleMount,
+                new[] { 3, 4 },
+                "MedusaSAMRadar1Single",
+                "RAM-45 x1",
+                "hardpoint sets 3 and 4",
+                null);
+
+            hasPatched = true;
+            Debug.Log("[MedusaSAMRadar1Single] Master Prefab injection complete!");
+        }
+    }
+
+
+
+    // ====================================================================================================
     // MEDUSA SAM_RADAR2 SINGLE (R9 STRATOLANCE x1)
     // ====================================================================================================
 
@@ -3395,10 +3609,10 @@ namespace BalanceAndVarietyRework
             HardpointInjection.InjectWeaponMount(
                 "EW1",
                 doubleMount,
-                new[] { 4 },
+                new[] { 3, 4 },
                 "MedusaSAMRadar2Double",
                 "R9 Stratolance x2",
-                "hardpoint set 4",
+                "hardpoint sets 3 and 4",
                 null);
 
             hasPatched = true;
