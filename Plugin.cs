@@ -116,6 +116,7 @@ namespace BalanceAndVarietyRework
         // Tarantula Balance Entries
         public static ConfigEntry<bool> EnableTarantulaLynchpinx14Double;
         public static ConfigEntry<bool> EnableTarantulaKingpinx8Double;
+        public static ConfigEntry<bool> EnableTarantula20mmRotaryCannon;
 
         // Ifrit Balance Entries
         public static ConfigEntry<bool> EnableIfritLynchpinx14Double;
@@ -293,6 +294,7 @@ namespace BalanceAndVarietyRework
             // Tarantula Changes
             EnableTarantulaLynchpinx14Double = Config.Bind("VL-49 Tarantula Changes", "Enable Tarantula Lynchpin x14 Double", true, "Enables the AGR-18 Lynchpin x14 double rocket pod on the Tarantula's hardpoint sets 4 and 5.");
             EnableTarantulaKingpinx8Double = Config.Bind("VL-49 Tarantula Changes", "Enable Tarantula Kingpin x8 Double", true, "Enables the AGR-24 Kingpin x8 double rocket pod on the Tarantula's hardpoint sets 4 and 5.");
+            EnableTarantula20mmRotaryCannon = Config.Bind("VL-49 Tarantula Changes", "Enable Tarantula 20mm Rotary Cannon", true, "Enables the 20mm Rotary Cannon (1000 rounds) on the Tarantula's hardpoint set 3.");
 
             // Ifrit Changes
             EnableIfritLynchpinx14Double = Config.Bind("KR-67 Ifrit Changes", "Enable Ifrit Lynchpin x14 Double", true, "Enables the AGR-18 Lynchpin x14 double rocket pod on the Ifrit's hardpoint sets 4 and 5.");
@@ -391,6 +393,7 @@ namespace BalanceAndVarietyRework
                 // Tarantula changes
                 typeof(TarantulaLynchpinx14DoublePatch),
                 typeof(TarantulaKingpinx8DoublePatch),
+                typeof(Tarantula20mmRotaryCannonPatch),
 
                 // Ifrit changes
                 typeof(IfritLynchpinx14DoublePatch),
@@ -828,6 +831,7 @@ namespace BalanceAndVarietyRework
         private static WeaponMount externalKingpinx8DoubleMount;
         private static WeaponMount internalLynchpinx14DoubleMount;
         private static WeaponMount internalKingpinx8DoubleMount;
+        private static WeaponMount turret20mmRotary2Mount;
 
         private const float InternalLynchpinRailDelay = 0.5f;
         private const float InternalKingpinRailDelay = 0.5f;
@@ -1229,6 +1233,368 @@ namespace BalanceAndVarietyRework
 
 
         // ================================================================================================
+        // CUSTOM TURRET WEAPONS
+        // ================================================================================================
+        public static WeaponMount GetTurret20mmRotary2()
+        {
+            if (turret20mmRotary2Mount != null)
+                return turret20mmRotary2Mount;
+
+            WeaponMount sourceMount = FindSourceMount("turret_12.7mm_rotary", "turret_12.7mm_rotary", "turret_12.7mm_rotary");
+            if (sourceMount == null)
+                return null;
+
+            GameObject prefab = ClonePrefabToVault(sourceMount.prefab, "turret_20mm_rotary2");
+            if (prefab == null)
+                return null;
+
+            Vector3 prefabLocalPosition = new Vector3(0f, 0.1f, 0f);
+            Vector3 prefabLocalEulerAngles = Vector3.zero;
+            Vector3 prefabLocalScale = new Vector3(1.58f, 1.58f, 1.58f);
+            ApplyExactLocalTransform(prefab.transform, prefabLocalPosition, prefabLocalEulerAngles, prefabLocalScale);
+
+            ApplyTurret20mmRotaryGunStats(prefab);
+            ApplyTurret20mmRotaryTurretStats(prefab);
+
+            turret20mmRotary2Mount = CreateConfiguredMount(
+                sourceMount,
+                prefab,
+                "20mm Rotary Cannon (1000 rounds)",
+                "turret_20mm_rotary2");
+
+            Debug.Log("[Turret20mmRotary2] Custom 20mm Rotary Cannon prefab and mount generation complete!");
+            return turret20mmRotary2Mount;
+        }
+
+        private static void ApplyTurret20mmRotaryGunStats(GameObject prefabRoot)
+        {
+            if (prefabRoot == null)
+                return;
+
+            Transform elevation = prefabRoot.transform.Find("turret/elevation");
+            if (elevation == null)
+            {
+                Debug.LogWarning("[Turret20mmRotary2] Could not find 'turret/elevation' in the duplicated turret prefab.");
+                return;
+            }
+
+            Component gun = FindComponentByTypeName(elevation, "Gun");
+            if (gun == null)
+            {
+                Debug.LogWarning("[Turret20mmRotary2] Could not find Gun component under 'turret/elevation'.");
+                return;
+            }
+
+            bool appliedAny = false;
+
+            appliedAny |= TrySetMemberValue(gun, "bulletSelfDestruct", 6f);
+            appliedAny |= TrySetMemberValue(gun, "bulletSpread", 4f);
+            appliedAny |= TrySetMemberValue(gun, "fireEnd", "20mmRotary4_stop");
+            appliedAny |= TrySetMemberValue(gun, "fireRate", 4500f);
+            appliedAny |= TrySetMemberValue(gun, "fireStart", "20mmRotary4_begin");
+            appliedAny |= TrySetMemberValue(gun, "selfDestructEffect", "airburst_30mm");
+            appliedAny |= TrySetMemberValue(gun, "startPitchMultiplier", 0.8f);
+            appliedAny |= TrySetMemberValue(gun, "fireSustained", "20mmRotary4_loop_4500rpm");
+            appliedAny |= TrySetMemberValue(gun, "tracerColor", new Color(85.445f, 4.0362f, 0.8544f, 1f));
+            appliedAny |= TrySetMemberValue(gun, "tracerRatio", 1f);
+            appliedAny |= TrySetMemberValue(gun, "tracerSize", 3f);
+            appliedAny |= TrySetMemberValue(gun, "proximityTimer", true);
+
+            UnityEngine.Object customInfo = GetOrCreateCustomWeaponInfo("Gun20mm_CIWS", "Gun20mm_CIWS2");
+            if (customInfo != null)
+            {
+                if (TrySetMemberValue(gun, "info", customInfo))
+                {
+                    appliedAny = true;
+                    Debug.Log("[Turret20mmRotary2] Assigned custom WeaponInfo 'Gun20mm_CIWS2' to Gun component.");
+                }
+            }
+
+            if (!appliedAny)
+            {
+                Debug.LogWarning("[Turret20mmRotary2] No Gun parameters were set. Check the Gun component field names and types.");
+            }
+            else
+            {
+                Debug.Log("[Turret20mmRotary2] Applied custom Gun parameters to turret_20mm_rotary2.");
+            }
+        }
+
+        private static void ApplyTurret20mmRotaryTurretStats(GameObject prefabRoot)
+        {
+            if (prefabRoot == null)
+                return;
+
+            Transform turretTransform = prefabRoot.transform.Find("turret");
+            if (turretTransform == null)
+            {
+                Debug.LogWarning("[Turret20mmRotary2] Could not find 'turret' in the duplicated turret prefab.");
+                return;
+            }
+
+            Component turretComp = FindComponentByTypeName(turretTransform, "Turret");
+            if (turretComp == null)
+            {
+                Debug.LogWarning("[Turret20mmRotary2] Could not find Turret component under 'turret'.");
+                return;
+            }
+
+            Traverse turretTraverse = Traverse.Create(turretComp);
+            object aimSolver = null;
+
+            Traverse aimSolverField = turretTraverse.Field("aimSolver");
+            if (aimSolverField.FieldExists())
+            {
+                aimSolver = aimSolverField.GetValue();
+            }
+            else
+            {
+                Traverse aimSolverProperty = turretTraverse.Property("aimSolver");
+                if (aimSolverProperty.PropertyExists())
+                {
+                    aimSolver = aimSolverProperty.GetValue();
+                }
+            }
+
+            if (aimSolver == null)
+            {
+                Debug.LogWarning("[Turret20mmRotary2] Could not find or access 'aimSolver' on Turret component.");
+                return;
+            }
+
+            bool appliedAny = false;
+            appliedAny |= TrySetMemberValue(aimSolver, "rakeAmount", 0.05f);
+            appliedAny |= TrySetMemberValue(aimSolver, "rakeFrequency", 0.5f);
+            appliedAny |= TrySetMemberValue(aimSolver, "simulationInterval", 1f);
+
+            if (!appliedAny)
+            {
+                Debug.LogWarning("[Turret20mmRotary2] No AimSolver parameters were set. Check the AimSolver field names and types.");
+            }
+            else
+            {
+                Debug.Log("[Turret20mmRotary2] Applied custom AimSolver parameters to turret_20mm_rotary2.");
+            }
+        }
+
+        private static Component FindComponentByTypeName(Transform root, string typeName)
+        {
+            if (root == null || string.IsNullOrEmpty(typeName))
+                return null;
+
+            foreach (Component component in root.GetComponentsInChildren<Component>(true))
+            {
+                if (component == null)
+                    continue;
+
+                Type type = component.GetType();
+                if (type != null && type.Name == typeName)
+                    return component;
+            }
+
+            return null;
+        }
+
+        private static bool TrySetMemberValue(object target, string memberName, object value)
+        {
+            if (target == null || string.IsNullOrEmpty(memberName))
+                return false;
+
+            try
+            {
+                Type type = target.GetType();
+
+                for (Type currentType = type; currentType != null && currentType != typeof(object); currentType = currentType.BaseType)
+                {
+                    FieldInfo field = currentType.GetField(
+                        memberName,
+                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static);
+
+                    if (field != null)
+                    {
+                        object converted = ConvertValueForType(value, field.FieldType);
+
+                        if (!ValidateConvertedUnityObject(value, converted, field.FieldType, memberName, type.Name))
+                            return false;
+
+                        field.SetValue(target, converted);
+                        return true;
+                    }
+
+                    PropertyInfo property = currentType.GetProperty(
+                        memberName,
+                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static);
+
+                    if (property != null && property.CanWrite)
+                    {
+                        object converted = ConvertValueForType(value, property.PropertyType);
+
+                        if (!ValidateConvertedUnityObject(value, converted, property.PropertyType, memberName, type.Name))
+                            return false;
+
+                        property.SetValue(target, converted);
+                        return true;
+                    }
+                }
+
+                Debug.LogWarning($"[CustomWeaponsReusedAssets] Could not find writable member '{memberName}' on {type.Name}.");
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[CustomWeaponsReusedAssets] Could not set member '{memberName}' on {target.GetType().Name}: {ex.Message}");
+            }
+
+            return false;
+        }
+
+        private static bool ValidateConvertedUnityObject(object originalValue, object convertedValue, Type targetType, string memberName, string typeName)
+        {
+            if (originalValue != null &&
+                convertedValue == null &&
+                targetType != null &&
+                typeof(UnityEngine.Object).IsAssignableFrom(targetType))
+            {
+                Debug.LogWarning($"[CustomWeaponsReusedAssets] Could not resolve UnityEngine.Object '{originalValue}' for member '{memberName}' on {typeName}.");
+                return false;
+            }
+
+            return true;
+        }
+
+        private static object ConvertValueForType(object value, Type targetType)
+        {
+            if (value == null)
+            {
+                if (targetType == null || !targetType.IsValueType)
+                    return null;
+
+                Type underlyingNullable = Nullable.GetUnderlyingType(targetType) ?? targetType;
+                return Activator.CreateInstance(underlyingNullable);
+            }
+
+            Type underlying = Nullable.GetUnderlyingType(targetType) ?? targetType;
+
+            if (underlying == typeof(Color))
+            {
+                if (value is Color color)
+                    return color;
+
+                if (value is Vector4 vector)
+                    return new Color(vector.x, vector.y, vector.z, vector.w);
+
+                if (value is string colorText && TryParseColor(colorText, out Color parsedColor))
+                    return parsedColor;
+            }
+
+            if (underlying == typeof(Vector4))
+            {
+                if (value is Vector4 vector4)
+                    return vector4;
+
+                if (value is Color colorAsVector)
+                    return new Vector4(colorAsVector.r, colorAsVector.g, colorAsVector.b, colorAsVector.a);
+
+                if (value is string vectorText && TryParseVector4(vectorText, out Vector4 parsedVector))
+                    return parsedVector;
+            }
+
+            if (typeof(UnityEngine.Object).IsAssignableFrom(underlying))
+            {
+                if (underlying.IsInstanceOfType(value))
+                    return value;
+
+                if (value is string unityObjectName && !string.IsNullOrEmpty(unityObjectName))
+                {
+                    UnityEngine.Object found = Resources.FindObjectsOfTypeAll(underlying)
+                        .FirstOrDefault(o =>
+                            o != null &&
+                            (o.name == unityObjectName || ObjectNameUtility.RemoveCloneSuffix(o.name) == unityObjectName));
+
+                    if (found != null)
+                        return found;
+
+                    return null;
+                }
+            }
+
+            if (underlying == typeof(string))
+            {
+                if (value is Color stringColor)
+                {
+                    return string.Format(
+                        CultureInfo.InvariantCulture,
+                        "{0} {1} {2} {3}",
+                        stringColor.r.ToString("R", CultureInfo.InvariantCulture),
+                        stringColor.g.ToString("R", CultureInfo.InvariantCulture),
+                        stringColor.b.ToString("R", CultureInfo.InvariantCulture),
+                        stringColor.a.ToString("R", CultureInfo.InvariantCulture));
+                }
+
+                return Convert.ToString(value, CultureInfo.InvariantCulture);
+            }
+
+            if (underlying.IsInstanceOfType(value))
+                return value;
+
+            if (underlying.IsEnum)
+            {
+                if (value is string enumText)
+                    return Enum.Parse(underlying, enumText, true);
+
+                return Enum.ToObject(underlying, value);
+            }
+
+            return Convert.ChangeType(value, underlying, CultureInfo.InvariantCulture);
+        }
+
+        private static bool TryParseColor(string text, out Color color)
+        {
+            color = Color.clear;
+
+            Vector4 vector;
+            if (!TryParseVector4(text, out vector))
+                return false;
+
+            color = new Color(vector.x, vector.y, vector.z, vector.w);
+            return true;
+        }
+
+        private static bool TryParseVector4(string text, out Vector4 vector)
+        {
+            vector = Vector4.zero;
+
+            if (string.IsNullOrWhiteSpace(text))
+                return false;
+
+            string[] parts = text.Trim().Split(new[] { ' ', ',', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length < 3)
+                return false;
+
+            float x;
+            float y;
+            float z;
+            float w = 1f;
+
+            if (!float.TryParse(parts[0], NumberStyles.Float, CultureInfo.InvariantCulture, out x) ||
+                !float.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out y) ||
+                !float.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out z))
+            {
+                return false;
+            }
+
+            if (parts.Length >= 4 &&
+                !float.TryParse(parts[3], NumberStyles.Float, CultureInfo.InvariantCulture, out w))
+            {
+                return false;
+            }
+
+            vector = new Vector4(x, y, z, w);
+            return true;
+        }
+
+
+
+        // ================================================================================================
         // MOUNT / PREFAB CREATION HELPERS
         // ================================================================================================
 
@@ -1507,7 +1873,51 @@ namespace BalanceAndVarietyRework
             }
         }
 
+        private static UnityEngine.Object GetOrCreateCustomWeaponInfo(string sourceAssetName, string newAssetName)
+        {
+            if (infoAssetCache.TryGetValue(newAssetName, out UnityEngine.Object cached))
+                return cached;
 
+            UnityEngine.Object sourceAsset = GetCachedInfoAsset(sourceAssetName);
+            if (sourceAsset == null)
+            {
+                Debug.LogWarning($"[CustomWeaponsReusedAssets] Could not find source info asset '{sourceAssetName}'.");
+                return null;
+            }
+
+            UnityEngine.Object newAsset = UnityEngine.Object.Instantiate(sourceAsset);
+            newAsset.name = newAssetName;
+            newAsset.hideFlags = HideFlags.HideAndDontSave;
+
+            if (newAsset is GameObject go)
+            {
+                go.transform.SetParent(PrefabVault.Get().transform);
+            }
+
+            object target = newAsset;
+            if (newAsset is GameObject goAsset)
+            {
+                foreach (Component comp in goAsset.GetComponentsInChildren<Component>(true))
+                {
+                    if (comp != null && comp.GetType().Name == "WeaponInfo")
+                    {
+                        target = comp;
+                        break;
+                    }
+                }
+            }
+            else if (newAsset.GetType().Name == "WeaponInfo")
+            {
+                target = newAsset;
+            }
+
+            TrySetMemberValue(target, "costPerRound", 0);
+            TrySetMemberValue(target, "description", "This 20mm CIWS is a lightened version of the one found on the Shard Class Corvette. It is effective against lightly armored ground targets, incoming munitions, and enemy aircraft.");
+
+            infoAssetCache[newAssetName] = newAsset;
+            Debug.Log($"[CustomWeaponsReusedAssets] Created and cached custom WeaponInfo '{newAssetName}'.");
+            return newAsset;
+        }
 
         private static UnityEngine.Object GetCachedInfoAsset(string assetName)
         {
@@ -3293,10 +3703,40 @@ namespace BalanceAndVarietyRework
 
 
 
+    [HarmonyPatch(typeof(WeaponManager), "Awake")]
+    public static class Tarantula20mmRotaryCannonPatch
+    {
+        private static bool hasPatched = false;
+
+        public static void Prefix()
+        {
+            if (!Plugin.EnableTarantula20mmRotaryCannon.Value || hasPatched)
+                return;
+
+            WeaponMount turretMount = CustomWeaponsReusedAssets.GetTurret20mmRotary2();
+            if (turretMount == null)
+                return;
+
+            HardpointInjection.InjectWeaponMount(
+                "QuadVTOL1",
+                turretMount,
+                new[] { 3 },
+                "Tarantula20mmRotaryCannon",
+                "20mm Rotary Cannon",
+                "hardpoint set 3",
+                null);
+
+            hasPatched = true;
+            Debug.Log("[Tarantula20mmRotaryCannon] Master Prefab injection complete!");
+        }
+    }
+
+
+
     // ====================================================================================================
     // KR-67 IFRIT CHANGES (Multirole1)
     // Config Category: KR-67 Ifrit Changes
-    // ====================================================================================================
+    // =====================================================================================================
 
 
 
