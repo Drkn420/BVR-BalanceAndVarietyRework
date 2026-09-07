@@ -81,6 +81,11 @@ namespace BalanceAndVarietyRework
         public static ConfigEntry<float> AShM300RCS;
         public static ConfigEntry<float> ALND420ktRCS;
 
+        public static ConfigEntry<bool> EnableScytheLoftFactor;
+        public static ConfigEntry<float> ScytheLoftFactorValue;
+        public static ConfigEntry<bool> EnableScimitarLoftFactor;
+        public static ConfigEntry<float> ScimitarLoftFactorValue;
+
         public static ConfigEntry<bool> EnableChicaneProxyGun;
         public static ConfigEntry<bool> EnableChicaneBayPylonSymmetryFix;
 
@@ -302,6 +307,30 @@ namespace BalanceAndVarietyRework
                 0.001f,
                 "Vanilla is 0.005.");
 
+            EnableScytheLoftFactor = BindRestartRequired(
+                "Missile Balance - ARH",
+                "Enable Scythe Loft Factor",
+                true,
+                "Master toggle.");
+
+            ScytheLoftFactorValue = BindRestartRequired(
+                "Missile Balance - ARH",
+                "Scythe Loft Factor Value",
+                0.7f,
+                "ARHSeeker.loftAmount for the Scythe (AAM2). Vanilla is 0.7.");
+
+            EnableScimitarLoftFactor = BindRestartRequired(
+                "Missile Balance - ARH",
+                "Enable Scimitar Loft Factor",
+                true,
+                "Master toggle.");
+
+            ScimitarLoftFactorValue = BindRestartRequired(
+                "Missile Balance - ARH",
+                "Scimitar Loft Factor Value",
+                0.1f,
+                "ARHSeeker.loftAmount for the Scimitar (AAM4). Vanilla is 0.1.");
+
             EnableChicaneProxyGun = BindRestartRequired(
                 "SAH-46 Chicane Changes",
                 "Enable Proximity Fuse 30mm Gun",
@@ -400,6 +429,7 @@ namespace BalanceAndVarietyRework
                 typeof(SARHLockPersistencePatch),
                 typeof(SARHRelockPatch),
                 typeof(CruiseMissileRCSPatch),
+                typeof(ARHSeekerLoftPatch),
                 typeof(ProxyGunPatch),
                 typeof(ChicaneBayPylonSymmetryFixPatch),
                 typeof(MedusaLaserPatch),
@@ -816,6 +846,11 @@ namespace BalanceAndVarietyRework
         public static float AShM300RCS;
         public static float ALND420ktRCS;
 
+        public static bool EnableScytheLoftFactor;
+        public static float ScytheLoftFactorValue;
+        public static bool EnableScimitarLoftFactor;
+        public static float ScimitarLoftFactorValue;
+
         public static bool EnableChicaneProxyGun;
         public static bool EnableChicaneBayPylonSymmetryFix;
 
@@ -858,6 +893,11 @@ namespace BalanceAndVarietyRework
             AGM99RCS = SafeFloat(Plugin.AGM99RCS.Value, 0.008f, "AGM-99 RCS");
             AShM300RCS = SafeFloat(Plugin.AShM300RCS.Value, 0.005f, "AShM-300 RCS");
             ALND420ktRCS = SafeFloat(Plugin.ALND420ktRCS.Value, 0.001f, "ALND-4 (20kt) RCS");
+
+            EnableScytheLoftFactor = Plugin.EnableScytheLoftFactor.Value;
+            ScytheLoftFactorValue = SafeFloat(Plugin.ScytheLoftFactorValue.Value, 0.7f, "Scythe Loft Factor Value");
+            EnableScimitarLoftFactor = Plugin.EnableScimitarLoftFactor.Value;
+            ScimitarLoftFactorValue = SafeFloat(Plugin.ScimitarLoftFactorValue.Value, 0.1f, "Scimitar Loft Factor Value");
 
             EnableChicaneProxyGun = Plugin.EnableChicaneProxyGun.Value;
             EnableChicaneBayPylonSymmetryFix = Plugin.EnableChicaneBayPylonSymmetryFix.Value;
@@ -2239,6 +2279,111 @@ namespace BalanceAndVarietyRework
             }
 
             return modified;
+        }
+    }
+
+
+
+    // ========================================================================
+    // ARH seeker loft factor patch.
+    // Applies configured loftAmount to Scythe (AAM2) and Scimitar (AAM4).
+    // ========================================================================
+    [HarmonyPatch(typeof(WeaponManager), "Awake")]
+    public static class ARHSeekerLoftPatch
+    {
+        private const string ScytheRootName = "AAM2";
+        private const string ScimitarRootName = "AAM4";
+
+        private static bool appliedScythe;
+        private static bool appliedScimitar;
+
+        public static void Prefix()
+        {
+            if (!RuntimeSettings.Captured)
+            {
+                Log.Error("ARH seeker loft patch ran before RuntimeSettings.Capture. This patch will be skipped.");
+                return;
+            }
+
+            if (!RuntimeSettings.EnableScytheLoftFactor && !RuntimeSettings.EnableScimitarLoftFactor)
+                return;
+
+            try
+            {
+                if (RuntimeSettings.EnableScytheLoftFactor && !appliedScythe)
+                {
+                    appliedScythe = Apply(
+                        "Scythe",
+                        ScytheRootName,
+                        RuntimeSettings.ScytheLoftFactorValue);
+                }
+
+                if (RuntimeSettings.EnableScimitarLoftFactor && !appliedScimitar)
+                {
+                    appliedScimitar = Apply(
+                        "Scimitar",
+                        ScimitarRootName,
+                        RuntimeSettings.ScimitarLoftFactorValue);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Exception("ARH seeker loft patch", ex);
+            }
+        }
+
+        private static bool Apply(string label, string rootName, float value)
+        {
+            int found = 0;
+            int modified = 0;
+
+            foreach (ARHSeeker seeker in Resources.FindObjectsOfTypeAll<ARHSeeker>())
+            {
+                if (seeker == null)
+                    continue;
+
+                if (!ObjectNameUtility.IsUnderNamedObject(seeker.gameObject, rootName))
+                    continue;
+
+                found++;
+
+                Traverse traverse = Traverse.Create(seeker);
+
+                Traverse field = traverse.Field("loftAmount");
+                if (field.FieldExists())
+                {
+                    field.SetValue(value);
+                    modified++;
+                    continue;
+                }
+
+                Traverse property = traverse.Property("loftAmount");
+                if (property.PropertyExists())
+                {
+                    property.SetValue(value);
+                    modified++;
+                    continue;
+                }
+
+                MissingMemberLog.ErrorOnce(
+                    $"ARHSeeker.loftAmount.{label}",
+                    $"[ARH Loft] {label} seeker on '{ObjectNameUtility.GetHierarchyPath(seeker.gameObject)}' is missing field or property 'loftAmount'.");
+            }
+
+            if (found == 0)
+            {
+                MissingMemberLog.WarnOnce(
+                    $"ARHLoft.{label}.Waiting",
+                    $"[ARH Loft] No ARHSeeker under '{rootName}' found yet. Will retry when another WeaponManager awakens.");
+                return false;
+            }
+
+            if (modified > 0)
+                Log.Info($"[ARH Loft] Set {label} ('{rootName}') loftAmount to {value} on {modified} seeker(s).");
+            else
+                Log.Info($"[ARH Loft] {label} ('{rootName}') seeker(s) were already processed by this mod.");
+
+            return true;
         }
     }
 
