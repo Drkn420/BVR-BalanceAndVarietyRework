@@ -92,6 +92,10 @@ namespace BalanceAndVarietyRework
         public static ConfigEntry<bool> EnableMedusaLaserBuff;
         public static ConfigEntry<float> MedusaLaserPowerDraw;
 
+        public static ConfigEntry<bool> EnableSpaagSingleMagazine;
+        public static ConfigEntry<int> SpaagMagazineCapacity;
+        public static ConfigEntry<int> SpaagMagazines;
+
         private void Awake()
         {
             Instance = this;
@@ -100,6 +104,7 @@ namespace BalanceAndVarietyRework
             BindImportantNotices();
             BindFunctionalConfigs();
             BindBlueprinterWeapons();
+            BindCanopyGlass();
 
             TryImportPendingConfigSeed();
 
@@ -354,6 +359,24 @@ namespace BalanceAndVarietyRework
                 "Laser Power Draw Value",
                 60.0f,
                 "Vanilla is 120.");
+
+            EnableSpaagSingleMagazine = BindRestartRequired(
+                "AeroSentry SPAAG Changes",
+                "Enable SPAAG Single Magazine Gun",
+                true,
+                "Master toggle. Consolidates the AeroSentry SPAAG gun ammo into one magazine. Vanilla Gun.magazineCapacity is 25 and Gun.magazines is 40.");
+
+            SpaagMagazineCapacity = BindRestartRequired(
+                "AeroSentry SPAAG Changes",
+                "SPAAG Gun Magazine Capacity",
+                1000,
+                "Gun.magazineCapacity for SPAAG1/Turret/gun. Vanilla is 25.");
+
+            SpaagMagazines = BindRestartRequired(
+                "AeroSentry SPAAG Changes",
+                "SPAAG Gun Magazine Count",
+                0,
+                "Gun.magazines for SPAAG1/Turret/gun. Vanilla is 40.");
         }
 
         private void BindBlueprinterWeapons()
@@ -363,6 +386,20 @@ namespace BalanceAndVarietyRework
                 if (def == null)
                 {
                     Log.Error("BlueprintWeaponRegistry contains a null definition. This definition will be skipped.");
+                    continue;
+                }
+
+                def.ConfigEntry = BindRestartRequired(def.Section, def.Key, def.DefaultValue, def.Description);
+            }
+        }
+
+        private void BindCanopyGlass()
+        {
+            foreach (CanopyGlassDefinition def in CanopyGlassRegistry.Definitions)
+            {
+                if (def == null)
+                {
+                    Log.Error("CanopyGlassRegistry contains a null definition. This definition will be skipped.");
                     continue;
                 }
 
@@ -433,7 +470,9 @@ namespace BalanceAndVarietyRework
                 typeof(ProxyGunPatch),
                 typeof(ChicaneBayPylonSymmetryFixPatch),
                 typeof(MedusaLaserPatch),
-                typeof(BlueprintWeaponDisablePatch)
+                typeof(SpaagSingleMagazinePatch),
+                typeof(BlueprintWeaponDisablePatch),
+                typeof(CanopyGlassPatch)
             };
 
             foreach (Type patchType in patchTypes)
@@ -857,6 +896,10 @@ namespace BalanceAndVarietyRework
         public static bool EnableMedusaLaserBuff;
         public static float MedusaLaserPowerDraw;
 
+        public static bool EnableSpaagSingleMagazine;
+        public static int SpaagMagazineCapacity;
+        public static int SpaagMagazines;
+
         public static void Capture()
         {
             if (Captured)
@@ -905,6 +948,10 @@ namespace BalanceAndVarietyRework
             EnableMedusaLaserBuff = Plugin.EnableMedusaLaserBuff.Value;
             MedusaLaserPowerDraw = SafeFloat(Plugin.MedusaLaserPowerDraw.Value, 60.0f, "Laser Power Draw Value");
 
+            EnableSpaagSingleMagazine = Plugin.EnableSpaagSingleMagazine.Value;
+            SpaagMagazineCapacity = SafeInt(Plugin.SpaagMagazineCapacity.Value, 1000, "SPAAG Gun Magazine Capacity");
+            SpaagMagazines = SafeInt(Plugin.SpaagMagazines.Value, 0, "SPAAG Gun Magazine Count");
+
             foreach (BlueprintWeaponDefinition definition in BlueprintWeaponRegistry.Definitions)
             {
                 if (definition == null)
@@ -924,8 +971,38 @@ namespace BalanceAndVarietyRework
                 }
             }
 
+            foreach (CanopyGlassDefinition definition in CanopyGlassRegistry.Definitions)
+            {
+                if (definition == null)
+                {
+                    Log.Error("CanopyGlassRegistry contains a null definition while capturing runtime settings.");
+                    continue;
+                }
+
+                if (definition.ConfigEntry == null)
+                {
+                    Log.Error($"Canopy glass config entry for [{definition.Section}] {definition.Key} was not bound. Falling back to default value.");
+                    definition.CachedDisabled = definition.DefaultValue;
+                }
+                else
+                {
+                    definition.CachedDisabled = definition.ConfigEntry.Value;
+                }
+            }
+
             Captured = true;
             Log.Info("BVR runtime settings captured. Any future config changes require a full game restart.");
+        }
+
+        private static int SafeInt(int value, int fallback, string name)
+        {
+            if (value < 0)
+            {
+                Log.Error($"Config value '{name}' is invalid ({value}). Using fallback value {fallback}.");
+                return fallback;
+            }
+
+            return value;
         }
 
         private static float SafeFloat(float value, float fallback, string name)
@@ -1097,6 +1174,10 @@ namespace BalanceAndVarietyRework
             new BlueprintWeaponDefinition { Section = "VL-49 Tarantula Changes", Key = "Enable Tarantula 20mm Rotary Cannon", Description = "Enables Blueprinter BVR_turret_20mm_rotary on set 3", DefaultValue = true, AircraftRootNames = new[] { "QuadVTOL1" }, AircraftRootContains = "QuadVTOL1", HardpointSets = new[] { 3 }, BlueprintKeys = new[] { "BVR_turret_20mm_rotary" } },
             new BlueprintWeaponDefinition { Section = "VL-49 Tarantula Changes", Key = "Enable Tarantula 57mm Side Mount", Description = "Enables Blueprinter BVR_turret_57mm_SideMount on set 2", DefaultValue = true, AircraftRootNames = new[] { "QuadVTOL1" }, AircraftRootContains = "QuadVTOL1", HardpointSets = new[] { 2 }, BlueprintKeys = new[] { "BVR_turret_57mm_SideMount" } },
             new BlueprintWeaponDefinition { Section = "VL-49 Tarantula Changes", Key = "Enable Tarantula 57mm Belly Mount", Description = "Enables Blueprinter BVR_turret_57mm_BellyMount on set 2", DefaultValue = true, AircraftRootNames = new[] { "QuadVTOL1" }, AircraftRootContains = "QuadVTOL1", HardpointSets = new[] { 2 }, BlueprintKeys = new[] { "BVR_turret_57mm_BellyMount" } },
+            new BlueprintWeaponDefinition { Section = "VL-49 Tarantula Changes", Key = "Enable Tarantula SPAAG-1 x1", Description = "Enables Blueprinter BVR_SPAAG1x1 on sets 0, 1", DefaultValue = true, AircraftRootNames = new[] { "QuadVTOL1" }, AircraftRootContains = "QuadVTOL1", HardpointSets = new[] { 0, 1 }, BlueprintKeys = new[] { "BVR_SPAAG1x1" } },
+            new BlueprintWeaponDefinition { Section = "VL-49 Tarantula Changes", Key = "Enable Tarantula SPAAG-2 x1", Description = "Enables Blueprinter BVR_SPAAG2x1 on sets 0, 1", DefaultValue = true, AircraftRootNames = new[] { "QuadVTOL1" }, AircraftRootContains = "QuadVTOL1", HardpointSets = new[] { 0, 1 }, BlueprintKeys = new[] { "BVR_SPAAG2x1" } },
+            new BlueprintWeaponDefinition { Section = "VL-49 Tarantula Changes", Key = "Enable Tarantula HLT-MArt x1", Description = "Enables Blueprinter BVR_HLT-MArtx1 on sets 0, 1", DefaultValue = true, AircraftRootNames = new[] { "QuadVTOL1" }, AircraftRootContains = "QuadVTOL1", HardpointSets = new[] { 0, 1 }, BlueprintKeys = new[] { "BVR_HLT-MArtx1" } },
+            new BlueprintWeaponDefinition { Section = "VL-49 Tarantula Changes", Key = "Enable Tarantula Truck2-MLRS x1", Description = "Enables Blueprinter BVR_Truck2-MLRSx1 on sets 0, 1", DefaultValue = true, AircraftRootNames = new[] { "QuadVTOL1" }, AircraftRootContains = "QuadVTOL1", HardpointSets = new[] { 0, 1 }, BlueprintKeys = new[] { "BVR_Truck2-MLRSx1" } },
             new BlueprintWeaponDefinition { Section = "KR-67 Ifrit Changes", Key = "Enable Ifrit Kingpin x8 Double", Description = "Enables Blueprinter BVR_Rocket2_4Podx2 on set 4", DefaultValue = true, AircraftRootNames = new[] { "Multirole1" }, AircraftRootContains = "Multirole1", HardpointSets = new[] { 4 }, BlueprintKeys = new[] { "BVR_Rocket2_4Podx2" } },
             new BlueprintWeaponDefinition { Section = "KR-67 Ifrit Changes", Key = "Enable Ifrit Lynchpin x14 Double", Description = "Enables Blueprinter BVR_RocketPod1_double on set 4", DefaultValue = true, AircraftRootNames = new[] { "Multirole1" }, AircraftRootContains = "Multirole1", HardpointSets = new[] { 4 }, BlueprintKeys = new[] { "BVR_RocketPod1_double" } },
             new BlueprintWeaponDefinition { Section = "EW-25 Medusa Changes", Key = "Enable Medusa Kingpin x8 Double", Description = "Enables Blueprinter BVR_Rocket2_4Podx2 on sets 3, 4", DefaultValue = true, AircraftRootNames = new[] { "EW1" }, AircraftRootContains = "EW1", HardpointSets = new[] { 3, 4 }, BlueprintKeys = new[] { "BVR_Rocket2_4Podx2" } },
@@ -1107,6 +1188,47 @@ namespace BalanceAndVarietyRework
             new BlueprintWeaponDefinition { Section = "EW-25 Medusa Changes", Key = "Enable Medusa Internal RAM-45 x3", Description = "Enables Blueprinter BVR_SAM_Radar1x3_Internal on set 1", DefaultValue = true, AircraftRootNames = new[] { "EW1" }, AircraftRootContains = "EW1", HardpointSets = new[] { 1 }, BlueprintKeys = new[] { "BVR_SAM_Radar1x3_Internal" } },
             new BlueprintWeaponDefinition { Section = "EW-25 Medusa Changes", Key = "Enable Medusa R9 Stratolance x2", Description = "Enables Blueprinter BVR_SAM_Radar2x2 on sets 3, 4", DefaultValue = true, AircraftRootNames = new[] { "EW1" }, AircraftRootContains = "EW1", HardpointSets = new[] { 3, 4 }, BlueprintKeys = new[] { "BVR_SAM_Radar2x2" } },
             new BlueprintWeaponDefinition { Section = "EW-25 Medusa Changes", Key = "Enable Medusa Internal R9 Stratolance x2", Description = "Enables Blueprinter BVR_SAM_Radar2x2_Internal on set 1", DefaultValue = true, AircraftRootNames = new[] { "EW1" }, AircraftRootContains = "EW1", HardpointSets = new[] { 1 }, BlueprintKeys = new[] { "BVR_SAM_Radar2x2_Internal" } }
+        };
+    }
+
+
+
+    // ========================================================================
+    // Canopy glass definitions.
+    // To add a new canopy glass toggle:
+    //   1. Add a new CanopyGlassDefinition below.
+    //   2. Ensure Section, Key, Description, and DefaultValue are user-friendly.
+    //   3. Ensure RootNames and GlassNames are correct.
+    //   4. No additional binding code is required; Plugin.BindCanopyGlass
+    //      handles it automatically.
+    // ========================================================================
+    internal class CanopyGlassDefinition
+    {
+        public string Section, Key, Description;
+        public bool DefaultValue;
+        public string[] RootNames;
+        public string[] GlassNames;
+        public ConfigEntry<bool> ConfigEntry;
+        public bool CachedDisabled;
+    }
+
+    internal static class CanopyGlassRegistry
+    {
+        public static readonly List<CanopyGlassDefinition> Definitions = new List<CanopyGlassDefinition>
+        {
+            new CanopyGlassDefinition { Section = "CI-22 Cricket Changes", Key = "Disable Canopy Glass", Description = "Disables this aircraft's canopy glass for better visibility.", DefaultValue = true, RootNames = new[] { "COIN" }, GlassNames = new[] { "canopyGlass_F_interior", "canopy_glass_R_interior" } },
+            new CanopyGlassDefinition { Section = "T/A-30 Compass Changes", Key = "Disable Canopy Glass", Description = "Disables this aircraft's canopy glass for better visibility.", DefaultValue = true, RootNames = new[] { "trainer" }, GlassNames = new[] { "canopyglass_R_int", "canopyglass_F_int", "canopyglass_FF_int" } },
+            new CanopyGlassDefinition { Section = "VT-7 Vagrant Changes", Key = "Disable Canopy Glass", Description = "Disables this aircraft's canopy glass for better visibility.", DefaultValue = true, RootNames = new[] { "VTOLTrainer1" }, GlassNames = new[] { "canopy_R_int", "canopy_F_int" } },
+            new CanopyGlassDefinition { Section = "UH-90 Ibis Changes", Key = "Disable Canopy Glass", Description = "Disables this aircraft's canopy glass for better visibility.", DefaultValue = true, RootNames = new[] { "UtilityHelo1" }, GlassNames = new[] { "canopyGlass_int", "cockpitWindowGlass_int", "doorGlass_L_int" } },
+            new CanopyGlassDefinition { Section = "SAH-46 Chicane Changes", Key = "Disable Canopy Glass", Description = "Disables this aircraft's canopy glass for better visibility.", DefaultValue = true, RootNames = new[] { "AttackHelo1" }, GlassNames = new[] { "canopyglass_RL_interior", "canopyglass_interior", "canopyglass_FL_interior" } },
+            new CanopyGlassDefinition { Section = "A-19 Brawler Changes", Key = "Disable Canopy Glass", Description = "Disables this aircraft's canopy glass for better visibility.", DefaultValue = true, RootNames = new[] { "CAS1" }, GlassNames = new[] { "canopyGlass_int", "canopyGlass_F_int" } },
+            new CanopyGlassDefinition { Section = "FS-12 Revoker Changes", Key = "Disable Canopy Glass", Description = "Disables this aircraft's canopy glass for better visibility.", DefaultValue = true, RootNames = new[] { "Fighter1" }, GlassNames = new[] { "canopyGlass_interior" } },
+            new CanopyGlassDefinition { Section = "FS-20 Vortex Changes", Key = "Disable Canopy Glass", Description = "Disables this aircraft's canopy glass for better visibility.", DefaultValue = true, RootNames = new[] { "SmallFighter1" }, GlassNames = new[] { "canopy_int" } },
+            new CanopyGlassDefinition { Section = "VL-49 Tarantula Changes", Key = "Disable Canopy Glass", Description = "Disables this aircraft's canopy glass for better visibility.", DefaultValue = true, RootNames = new[] { "QuadVTOL1" }, GlassNames = new[] { "glass_cockpit_int", "door_FFL_glass_int", "door_FFR_glass_int", "nose_glass_int" } },
+            new CanopyGlassDefinition { Section = "KR-67 Ifrit Changes", Key = "Disable Canopy Glass", Description = "Disables this aircraft's canopy glass for better visibility.", DefaultValue = true, RootNames = new[] { "Multirole1" }, GlassNames = new[] { "canopy_R_int", "canopy_F_int" } },
+            new CanopyGlassDefinition { Section = "EW-25 Medusa Changes", Key = "Disable Canopy Glass", Description = "Disables this aircraft's canopy glass for better visibility.", DefaultValue = true, RootNames = new[] { "EW1" }, GlassNames = new[] { "canopy_int" } },
+            new CanopyGlassDefinition { Section = "SFB-81 Darkreach Changes", Key = "Disable Canopy Glass", Description = "Disables this aircraft's canopy glass for better visibility.", DefaultValue = true, RootNames = new[] { "Darkreach" }, GlassNames = new[] { "canopyGlass_interior", "windows_interior" } },
+            new CanopyGlassDefinition { Section = "Alkyon AB-4 Changes", Key = "Disable Canopy Glass", Description = "Disables this aircraft's canopy glass for better visibility.", DefaultValue = true, RootNames = new[] { "FastBomber1" }, GlassNames = new[] { "canopy_int", "doorGlass_L_int", "doorGlass_R_int" } }
         };
     }
 
@@ -2694,6 +2816,274 @@ namespace BalanceAndVarietyRework
                 Log.Info($"[Medusa Laser] Set laser power draw to {RuntimeSettings.MedusaLaserPowerDraw} on {modified} component(s).");
 
             return true;
+        }
+    }
+
+
+
+    // ========================================================================
+    // AeroSentry SPAAG single magazine patch.
+    // Hooks Gun.Awake to ensure magazineCapacity and magazines are set BEFORE
+    // Gun.Awake calculates maxMagazines, bulletsLoaded, and ammo.
+    // This guarantees correct initialization order for all SPAAG1 variants.
+    // ========================================================================
+    [HarmonyPatch(typeof(Gun), "Awake")]
+    public static class SpaagSingleMagazinePatch
+    {
+        private const string SpaagNameContains = "SPAAG1";
+        private static readonly HashSet<string> appliedLogKeys = new HashSet<string>();
+
+        public static void Prefix(Gun __instance)
+        {
+            if (!RuntimeSettings.Captured)
+            {
+                Log.Error("AeroSentry SPAAG single magazine patch ran before RuntimeSettings.Capture. This patch will be skipped.");
+                return;
+            }
+
+            if (!RuntimeSettings.EnableSpaagSingleMagazine)
+                return;
+
+            try
+            {
+                if (__instance == null || __instance.gameObject == null)
+                    return;
+
+                string rootName = ObjectNameUtility.GetCleanRootName(__instance.gameObject);
+                if (rootName.IndexOf(SpaagNameContains, StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    ApplyToGun(__instance, rootName);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Exception("AeroSentry SPAAG single magazine patch", ex);
+            }
+        }
+
+        private static void ApplyToGun(Gun gun, string rootName)
+        {
+            Traverse traverse = Traverse.Create(gun);
+            Traverse capField = traverse.Field("magazineCapacity");
+            Traverse magsField = traverse.Field("magazines");
+
+            if (!capField.FieldExists())
+            {
+                MissingMemberLog.ErrorOnce(
+                    $"SpaagSingleMagazine.magazineCapacity|{rootName}",
+                    $"[SPAAG Single Magazine] Gun on '{rootName}' is missing field 'magazineCapacity'.");
+                return;
+            }
+
+            if (!magsField.FieldExists())
+            {
+                MissingMemberLog.ErrorOnce(
+                    $"SpaagSingleMagazine.magazines|{rootName}",
+                    $"[SPAAG Single Magazine] Gun on '{rootName}' is missing field 'magazines'.");
+                return;
+            }
+
+            int currentCap = capField.GetValue<int>();
+            int currentMags = magsField.GetValue<int>();
+
+            bool changed = false;
+
+            if (currentCap != RuntimeSettings.SpaagMagazineCapacity)
+            {
+                capField.SetValue(RuntimeSettings.SpaagMagazineCapacity);
+                changed = true;
+            }
+
+            if (currentMags != RuntimeSettings.SpaagMagazines)
+            {
+                magsField.SetValue(RuntimeSettings.SpaagMagazines);
+                changed = true;
+            }
+
+            if (changed)
+            {
+                string logKey = $"SpaagSingleMagazine.Applied|{rootName}|{RuntimeSettings.SpaagMagazineCapacity}|{RuntimeSettings.SpaagMagazines}";
+                if (appliedLogKeys.Add(logKey))
+                {
+                    Log.Info(
+                        $"[SPAAG Single Magazine] Set Gun.magazineCapacity={RuntimeSettings.SpaagMagazineCapacity} " +
+                        $"and Gun.magazines={RuntimeSettings.SpaagMagazines} on '{rootName}' before Awake initialization.");
+                }
+            }
+        }
+    }
+
+
+
+    // ========================================================================
+    // Canopy glass visibility patch.
+    // Uses startup-cached config values only. Runtime config changes are ignored.
+    // ========================================================================
+    [HarmonyPatch(typeof(WeaponManager), "Awake")]
+    public static class CanopyGlassPatch
+    {
+        private static readonly HashSet<string> infoLogKeys = new HashSet<string>();
+
+        private sealed class ToggleState
+        {
+            public CanopyGlassDefinition Definition;
+            public HashSet<string> RootNameSet;
+            public HashSet<string> GlassNameSet;
+            public bool RootFound;
+            public int Found;
+            public int Disabled;
+            public HashSet<string> FoundNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        public static void Prefix()
+        {
+            if (!RuntimeSettings.Captured)
+            {
+                Log.Error("Canopy glass patch ran before RuntimeSettings.Capture. This patch will be skipped.");
+                return;
+            }
+
+            try
+            {
+                ApplyAll();
+            }
+            catch (Exception ex)
+            {
+                Log.Exception("Canopy glass patch", ex);
+            }
+        }
+
+        private static void ApplyAll()
+        {
+            List<ToggleState> states = new List<ToggleState>();
+
+            foreach (CanopyGlassDefinition definition in CanopyGlassRegistry.Definitions)
+            {
+                if (definition == null || !definition.CachedDisabled)
+                    continue;
+
+                if (definition.RootNames == null || definition.RootNames.Length == 0 ||
+                    definition.GlassNames == null || definition.GlassNames.Length == 0)
+                {
+                    MissingMemberLog.ErrorOnce(
+                        $"CanopyGlass.{definition.Section}.InvalidDefinition",
+                        $"[Canopy Glass] Definition for '{definition.Section}' is missing RootNames or GlassNames.");
+                    continue;
+                }
+
+                states.Add(new ToggleState
+                {
+                    Definition = definition,
+                    RootNameSet = new HashSet<string>(definition.RootNames, StringComparer.OrdinalIgnoreCase),
+                    GlassNameSet = new HashSet<string>(definition.GlassNames, StringComparer.OrdinalIgnoreCase)
+                });
+            }
+
+            if (states.Count == 0)
+                return;
+
+            foreach (GameObject gameObject in Resources.FindObjectsOfTypeAll<GameObject>())
+            {
+                if (gameObject == null || ObjectNameUtility.IsPrefabAsset(gameObject))
+                    continue;
+
+                string cleanName = ObjectNameUtility.RemoveCloneSuffix(gameObject.name);
+                if (string.IsNullOrEmpty(cleanName))
+                    continue;
+
+                foreach (ToggleState state in states)
+                {
+                    if (!state.RootFound && state.RootNameSet.Contains(cleanName))
+                        state.RootFound = true;
+
+                    if (!state.GlassNameSet.Contains(cleanName))
+                        continue;
+
+                    if (!IsUnderAnyRoot(gameObject, state.Definition.RootNames))
+                        continue;
+
+                    state.RootFound = true;
+                    state.Found++;
+                    state.FoundNames.Add(cleanName);
+
+                    if (gameObject.activeSelf)
+                    {
+                        gameObject.SetActive(false);
+                        state.Disabled++;
+                    }
+                }
+            }
+
+            foreach (ToggleState state in states)
+            {
+                try
+                {
+                    Report(state);
+                }
+                catch (Exception ex)
+                {
+                    Log.Exception($"Canopy glass reporting for '{state.Definition.Section}'", ex);
+                }
+            }
+        }
+
+        private static void Report(ToggleState state)
+        {
+            CanopyGlassDefinition definition = state.Definition;
+
+            if (!state.RootFound)
+            {
+                MissingMemberLog.WarnOnce(
+                    $"CanopyGlass.{definition.Section}.Waiting",
+                    $"[Canopy Glass] No aircraft root(s) '{string.Join(", ", definition.RootNames)}' found yet. Will retry when another WeaponManager awakens.");
+                return;
+            }
+
+            if (state.Found == 0)
+            {
+                MissingMemberLog.ErrorOnce(
+                    $"CanopyGlass.{definition.Section}.Missing",
+                    $"[Canopy Glass] Aircraft root(s) '{string.Join(", ", definition.RootNames)}' were found, but none of the expected glass objects were found: {string.Join(", ", definition.GlassNames)}.");
+                return;
+            }
+
+            string[] missingNames = definition.GlassNames
+                .Where(glass => !state.FoundNames.Contains(glass))
+                .ToArray();
+
+            if (missingNames.Length > 0)
+            {
+                MissingMemberLog.ErrorOnce(
+                    $"CanopyGlass.{definition.Section}.PartialMissing",
+                    $"[Canopy Glass] Aircraft root(s) '{string.Join(", ", definition.RootNames)}' are missing glass object(s): {string.Join(", ", missingNames)}.");
+            }
+
+            if (state.Disabled > 0)
+            {
+                string logKey = $"CanopyGlass.Disabled|{definition.Section}";
+                if (infoLogKeys.Add(logKey))
+                    Log.Info($"[Canopy Glass] Disabled {state.Disabled} glass object(s) for '{definition.Section}'.");
+            }
+            else
+            {
+                string logKey = $"CanopyGlass.AlreadyHidden|{definition.Section}";
+                if (infoLogKeys.Add(logKey))
+                    Log.Info($"[Canopy Glass] Glass for '{definition.Section}' was already hidden by this mod.");
+            }
+        }
+
+        private static bool IsUnderAnyRoot(GameObject gameObject, string[] rootNames)
+        {
+            if (gameObject == null || rootNames == null)
+                return false;
+
+            foreach (string rootName in rootNames)
+            {
+                if (!string.IsNullOrEmpty(rootName) && ObjectNameUtility.IsUnderNamedObject(gameObject, rootName))
+                    return true;
+            }
+
+            return false;
         }
     }
 }
