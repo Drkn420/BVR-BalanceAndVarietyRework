@@ -44,7 +44,7 @@ namespace BalanceAndVarietyRework
     [BepInPlugin("com.Draken0015.BVR", "Balance and Variety Rework", BaseVersion)]
     public class Plugin : BaseUnityPlugin
     {
-        public const string BaseVersion = "1.3.0";
+        public const string BaseVersion = "1.2.3";
 
         // Seed format version is separate from mod version so future seed layout
         // changes can fail loudly instead of silently importing wrong data.

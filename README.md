@@ -3,7 +3,7 @@
 ## What this is:
 This rebalance project aims to push Nuclear Option's gameplay towards a more realistic simlite experience while still honouring ShockFront's vision.
 Its main design focus is customisation.
-Any change the mod introduces can be toggled and all values can be tweaked. (allows sandbox-style play)
+Any change the mod introduces can be toggled and all values can be tweaked, which makes sandbox-style play and tuning a lot more approachable.
 
 BVR captures its settings at startup, so config changes require a full game restart to take effect.
 
@@ -54,6 +54,28 @@ These options are included so the behaviour can be adjusted even though the defa
 - Gives the Medusa R9 Stratolance x2 launchers on hardpoint sets 3 and 4.
 - Gives the Medusa internal R9 Stratolance x2 launchers on hardpoint set 1.
 
+### AeroSentry SPAAG Changes:
+- Adds a master toggle to consolidate the AeroSentry SPAAG gun ammo into a single magazine.
+- Lets you tune the magazine capacity and total magazine count away from vanilla values.
+- Default values are set to `1000` magazine capacity and `0` magazine count, which retains the vanilla total ammo, but removes the burst behavior. (Ironically it is still weaker than the Anvil, but by a much smaller margin)
+
+### Canopy Glass Visibility Changes:
+Adds switchable canopy glass visibility toggles across all the airframes:
+This helps people who are annoyed by the strong glare and dirt on the glass.
+- **CI-22 Cricket**
+- **T/A-30 Compass**
+- **VT-7 Vagrant**
+- **UH-90 Ibis**
+- **SAH-46 Chicane**
+- **A-19 Brawler**
+- **FS-12 Revoker**
+- **FS-20 Vortex**
+- **VL-49 Tarantula**
+- **KR-67 Ifrit**
+- **EW-25 Medusa**
+- **SFB-81 Darkreach**
+- **Alkyon AB-4**
+
 ### Expanded Blueprint Weapon Options Across Airframes:
 Adds the following customizable blueprint loadout options across multiple airframes.  
 Hardpoint sets start at `0` and increase from left to right in the loadout selection screen.
@@ -71,6 +93,10 @@ Hardpoint sets start at `0` and increase from left to right in the loadout selec
   - AGR-18 Lynchpin (x14) double and AGR-24 Kingpin (x8) double on hardpoint sets 0 and 1.
   - Asymmetric pylons are always considered separately, so 0 and 1 in this case are the stubs.
 
+- **SAH-46 Chicane:**
+  - AGR-18 Lynchpin (x14) double and AGR-24 Kingpin (x8) double on its internal bay.
+  - Optional AAM-24 Scythe x1 or x2 mount on hardpoint set 2.
+
 - **FS-12 Revoker:**
   - AGR-18 Lynchpin (x14) double and AGR-24 Kingpin (x8) double on hardpoint set 2.
   - AGR-18 Lynchpin (x21) triple and AGR-24 Kingpin (x12) triple on hardpoint set 2.
@@ -83,9 +109,19 @@ Hardpoint sets start at `0` and increase from left to right in the loadout selec
   - 20mm CIWS rotary cannon on hardpoint set 3.
   - 57mm Flak side mount on hardpoint set 2.
   - 57mm belly mount on hardpoint set 2.
+  - SPAAG-1 x1 and SPAAG-2 x1 variants on hardpoint sets 0 and 1 (main cargo slot).
+  - HLT-MArt x1 and Truck2-MLRS x1 variants on hardpoint sets 0 and 1 (main cargo slot).
 
 - **KR-67 Ifrit:**
   - AGR-18 Lynchpin (x14) double and AGR-24 Kingpin (x8) double on hardpoint set 4.
+
+- **EW-25 Medusa:**
+  - AGR-18 Lynchpin (x14) double and AGR-24 Kingpin (x8) double on hardpoint sets 3 and 4.
+  - AGR-18 Lynchpin (x21) triple and AGR-24 Kingpin (x12) triple on hardpoint sets 3 and 4.
+  - RAM-45 x3 launchers on hardpoint sets 3 and 4.
+  - Internal RAM-45 x3 launchers on hardpoint set 1.
+  - R9 Stratolance x2 launchers on hardpoint sets 3 and 4.
+  - Internal R9 Stratolance x2 launchers on hardpoint set 1.
 
 ## More things are planned and in active development! :D
 If you have any other changes you'd like to see, sound them out in the issues section or on the Discord mod forums. I'll keep track and consider all of them. <3
