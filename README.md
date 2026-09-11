@@ -1,5 +1,7 @@
 # BVR - Balance and Variety Rework
 
+## Version 1.2.4
+
 ## What this is:
 This rebalance project aims to push Nuclear Option's gameplay towards a more realistic simlite experience while still honouring ShockFront's vision.
 Its main design focus is customisation.
@@ -21,6 +23,7 @@ The current config hash and seed can be viewed in the `Important Notices` sectio
 - Adds SARH relocking to the original target after a delay for R9 Stratolance and RAM-45.
   - Configurable delay and attempt limits.
   - Defaults to `3.0s` delay and infinite attempts.
+- Adds configurable flare and missile tuning for aircraft in the IR missile balance category.
 
 ### Cruise Missile RCS Changes:
 Adds configurable radar cross-section values for cruise missiles:
@@ -57,24 +60,27 @@ These options are included so the behaviour can be adjusted even though the defa
 ### AeroSentry SPAAG Changes:
 - Adds a master toggle to consolidate the AeroSentry SPAAG gun ammo into a single magazine.
 - Lets you tune the magazine capacity and total magazine count away from vanilla values.
-- Default values are set to `1000` magazine capacity and `0` magazine count, which retains the vanilla total ammo, but removes the burst behavior. (Ironically it is still weaker than the Anvil, but by a much smaller margin)
+- Default values are set to `1025` magazine capacity and `0` magazine count, which retains the vanilla total ammo but removes the burst behaviour. 
+- This significantly improves the AeroSentry's sustained fire profile while keeping the total ammo budget intact. (Almost as capable as Anvil now)
+
+### Shard Class Corvette Changes:
+- Adds a master toggle to consolidate the Shard Class Corvette 57mm cannon ammo into a single magazine.
+- Default values are `1206` magazine capacity and `0` magazine count, allowing it to fire continuously.
+
+### Dynamo Class Destroyer Changes:
+- Adds a master toggle that sets the Dynamo railgun's self-destruct VFX to the explosion effect used by the `explosion_10kg` payload. (It lacked VFX before)
+
+
+### Annex Carrier Changes:
+- Adds an optional arresting cable system to the Annex Carrier using Hyperion Fleet Carrier style cable placement.
+
+### Cursor LFD Changes:
+- Adds an optional arresting cable system to the Cursor LFD using the same Hyperion Fleet Carrier style cable layout.
+- The cables are stronger on the Cursor to compensate for the shorter deck.
 
 ### Canopy Glass Visibility Changes:
-Adds switchable canopy glass visibility toggles across all the airframes:
-This helps people who are annoyed by the strong glare and dirt on the glass.
-- **CI-22 Cricket**
-- **T/A-30 Compass**
-- **VT-7 Vagrant**
-- **UH-90 Ibis**
-- **SAH-46 Chicane**
-- **A-19 Brawler**
-- **FS-12 Revoker**
-- **FS-20 Vortex**
-- **VL-49 Tarantula**
-- **KR-67 Ifrit**
-- **EW-25 Medusa**
-- **SFB-81 Darkreach**
-- **Alkyon AB-4**
+Adds switchable canopy glass visibility toggles across all airframes:
+This helps people who are annoyed by strong glare and dirt on the glass.
 
 ### Expanded Blueprint Weapon Options Across Airframes:
 Adds the following customizable blueprint loadout options across multiple airframes.  

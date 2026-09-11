@@ -44,7 +44,7 @@ namespace BalanceAndVarietyRework
     [BepInPlugin("com.Draken0015.BVR", "Balance and Variety Rework", BaseVersion)]
     public class Plugin : BaseUnityPlugin
     {
-        public const string BaseVersion = "1.2.3";
+        public const string BaseVersion = "1.2.4";
 
         // Seed format version is separate from mod version so future seed layout
         // changes can fail loudly instead of silently importing wrong data.
@@ -63,6 +63,7 @@ namespace BalanceAndVarietyRework
         public static ConfigEntry<bool> EnableIRMissilesBuff;
         public static ConfigEntry<float> FlareCountMultiplier;
         public static ConfigEntry<float> FlareRejectionMultiplier;
+        public static ConfigEntry<float> MMRS3MaxTurnRate;
 
         public static ConfigEntry<bool> EnableR9LockPersistenceBuff;
         public static ConfigEntry<float> R9LockPersistenceValue;
@@ -95,6 +96,12 @@ namespace BalanceAndVarietyRework
         public static ConfigEntry<bool> EnableSpaagSingleMagazine;
         public static ConfigEntry<int> SpaagMagazineCapacity;
         public static ConfigEntry<int> SpaagMagazines;
+        public static ConfigEntry<bool> EnableCorvetteSingleMagazine;
+        public static ConfigEntry<int> CorvetteCannonMagazineCapacity;
+        public static ConfigEntry<int> CorvetteCannonMagazineCount;
+        public static ConfigEntry<bool> EnableDynamoRailgunSelfDestructVFX;
+        public static ConfigEntry<bool> EnableAnnexArrestingCables;
+        public static ConfigEntry<bool> EnableCursorLFDArrestingCables;
 
         private void Awake()
         {
@@ -116,6 +123,7 @@ namespace BalanceAndVarietyRework
             FinalizeVersionAndHash();
             RegisterHarmonyPatches();
             BlueprintWeaponToggleSystem.Initialize(this);
+            ArrestingCableSystem.Initialize(this);
 
             Log.Info("BVR - Balance and Variety Rework Mod Loaded!");
         }
@@ -227,6 +235,12 @@ namespace BalanceAndVarietyRework
                 "Flare Rejection Multiplier",
                 2.0f,
                 "Multiplies flare rejection.");
+
+            MMRS3MaxTurnRate = BindRestartRequired(
+                "Missile Balance - IR",
+                "MMR-S3 Max Turn Rate",
+                45.0f,
+                "Missile.maxTurnRate for the MMR-S3 (AAM1). Vanilla is 180.");
 
             EnableR9LockPersistenceBuff = BindRestartRequired(
                 "Missile Balance - SARH",
@@ -369,7 +383,7 @@ namespace BalanceAndVarietyRework
             SpaagMagazineCapacity = BindRestartRequired(
                 "AeroSentry SPAAG Changes",
                 "SPAAG Gun Magazine Capacity",
-                1000,
+                1025,
                 "Gun.magazineCapacity for SPAAG1/Turret/gun. Vanilla is 25.");
 
             SpaagMagazines = BindRestartRequired(
@@ -377,6 +391,42 @@ namespace BalanceAndVarietyRework
                 "SPAAG Gun Magazine Count",
                 0,
                 "Gun.magazines for SPAAG1/Turret/gun. Vanilla is 40.");
+
+            EnableCorvetteSingleMagazine = BindRestartRequired(
+                "Shard Class Corvette Changes",
+                "Enable Single Magazine 57mm Cannon",
+                true,
+                "Master toggle. Consolidates the Shard Class Corvette 57mm cannon ammo into one magazine.");
+
+            CorvetteCannonMagazineCapacity = BindRestartRequired(
+                "Shard Class Corvette Changes",
+                "Corvette 57mm Cannon Magazine Capacity",
+                1206,
+                "Gun.magazineCapacity for Corvette1/bow1/turret_F/cannon_F.");
+
+            CorvetteCannonMagazineCount = BindRestartRequired(
+                "Shard Class Corvette Changes",
+                "Corvette 57mm Cannon Magazine Count",
+                0,
+                "Gun.magazines for Corvette1/bow1/turret_F/cannon_F.");
+
+            EnableDynamoRailgunSelfDestructVFX = BindRestartRequired(
+                "Dynamo Class Destroyer Changes",
+                "Enable Railgun Self-Destruct VFX",
+                true,
+                "Master toggle. Sets the Dynamo railgun's self-destruct effect to explosion_10kg.");
+
+            EnableAnnexArrestingCables = BindRestartRequired(
+                "Annex Carrier Changes",
+                "Enable Annex Carrier Arresting Cables",
+                true,
+                "Master toggle. Adds Hyperion Fleet Carrier arresting cables to the Annex Carrier.");
+
+            EnableCursorLFDArrestingCables = BindRestartRequired(
+                "Cursor LFD Changes",
+                "Enable Cursor LFD Arresting Cables",
+                true,
+                "Master toggle. Adds Hyperion Fleet Carrier arresting cables to the Cursor LFD.");
         }
 
         private void BindBlueprinterWeapons()
@@ -463,6 +513,7 @@ namespace BalanceAndVarietyRework
             Type[] patchTypes =
             {
                 typeof(StatsPatch),
+                typeof(MMRS3MaxTurnRatePatch),
                 typeof(SARHLockPersistencePatch),
                 typeof(SARHRelockPatch),
                 typeof(CruiseMissileRCSPatch),
@@ -471,6 +522,9 @@ namespace BalanceAndVarietyRework
                 typeof(ChicaneBayPylonSymmetryFixPatch),
                 typeof(MedusaLaserPatch),
                 typeof(SpaagSingleMagazinePatch),
+                typeof(CorvetteSingleMagazinePatch),
+                typeof(DynamoRailgunSelfDestructPatch),
+                typeof(ArrestingCableNotifyPatch),
                 typeof(BlueprintWeaponDisablePatch),
                 typeof(CanopyGlassPatch)
             };
@@ -867,6 +921,7 @@ namespace BalanceAndVarietyRework
         public static bool EnableIRMissilesBuff;
         public static float FlareCountMultiplier;
         public static float FlareRejectionMultiplier;
+        public static float MMRS3MaxTurnRate;
 
         public static bool EnableR9LockPersistenceBuff;
         public static float R9LockPersistenceValue;
@@ -899,6 +954,12 @@ namespace BalanceAndVarietyRework
         public static bool EnableSpaagSingleMagazine;
         public static int SpaagMagazineCapacity;
         public static int SpaagMagazines;
+        public static bool EnableCorvetteSingleMagazine;
+        public static int CorvetteCannonMagazineCapacity;
+        public static int CorvetteCannonMagazineCount;
+        public static bool EnableDynamoRailgunSelfDestructVFX;
+        public static bool EnableAnnexArrestingCables;
+        public static bool EnableCursorLFDArrestingCables;
 
         public static void Capture()
         {
@@ -917,6 +978,7 @@ namespace BalanceAndVarietyRework
             EnableIRMissilesBuff = Plugin.EnableIRMissilesBuff.Value;
             FlareCountMultiplier = SafeFloat(Plugin.FlareCountMultiplier.Value, 2.0f, "Flare Count Multiplier");
             FlareRejectionMultiplier = SafeFloat(Plugin.FlareRejectionMultiplier.Value, 2.0f, "Flare Rejection Multiplier");
+            MMRS3MaxTurnRate = SafeFloat(Plugin.MMRS3MaxTurnRate.Value, 45.0f, "MMR-S3 Max Turn Rate");
 
             EnableR9LockPersistenceBuff = Plugin.EnableR9LockPersistenceBuff.Value;
             R9LockPersistenceValue = SafeFloat(Plugin.R9LockPersistenceValue.Value, 3.0f, "R9 Lock Persistence Value");
@@ -949,8 +1011,15 @@ namespace BalanceAndVarietyRework
             MedusaLaserPowerDraw = SafeFloat(Plugin.MedusaLaserPowerDraw.Value, 60.0f, "Laser Power Draw Value");
 
             EnableSpaagSingleMagazine = Plugin.EnableSpaagSingleMagazine.Value;
-            SpaagMagazineCapacity = SafeInt(Plugin.SpaagMagazineCapacity.Value, 1000, "SPAAG Gun Magazine Capacity");
+            SpaagMagazineCapacity = SafeInt(Plugin.SpaagMagazineCapacity.Value, 1025, "SPAAG Gun Magazine Capacity");
             SpaagMagazines = SafeInt(Plugin.SpaagMagazines.Value, 0, "SPAAG Gun Magazine Count");
+            EnableCorvetteSingleMagazine = Plugin.EnableCorvetteSingleMagazine.Value;
+            CorvetteCannonMagazineCapacity = SafeInt(Plugin.CorvetteCannonMagazineCapacity.Value, 1206, "Corvette 57mm Cannon Magazine Capacity");
+            CorvetteCannonMagazineCount = SafeInt(Plugin.CorvetteCannonMagazineCount.Value, 0, "Corvette 57mm Cannon Magazine Count");
+            EnableDynamoRailgunSelfDestructVFX = Plugin.EnableDynamoRailgunSelfDestructVFX.Value;
+
+            EnableAnnexArrestingCables = Plugin.EnableAnnexArrestingCables.Value;
+            EnableCursorLFDArrestingCables = Plugin.EnableCursorLFDArrestingCables.Value;
 
             foreach (BlueprintWeaponDefinition definition in BlueprintWeaponRegistry.Definitions)
             {
@@ -1881,6 +1950,198 @@ namespace BalanceAndVarietyRework
                     "IRBuff.IRSeekerWaiting",
                     "[IR Buff] No IRSeeker instances found yet. Will retry when another WeaponManager awakens.");
             }
+        }
+    }
+
+
+
+    // ========================================================================
+    // MMR-S3 (AAM1) max turn rate patch.
+    // Searches all loaded GameObjects named AAM1 and applies maxTurnRate only
+    // to those that contain a Missile component. This avoids assuming a fixed
+    // AAM1/Missile child path.
+    // ========================================================================
+    [HarmonyPatch(typeof(WeaponManager), "Awake")]
+    public static class MMRS3MaxTurnRatePatch
+    {
+        private const string AAM1Name = "AAM1";
+        private static bool applied;
+
+        public static void Prefix()
+        {
+            if (!RuntimeSettings.Captured)
+            {
+                Log.Error("MMR-S3 max turn rate patch ran before RuntimeSettings.Capture. This patch will be skipped.");
+                return;
+            }
+
+            if (applied)
+                return;
+
+            try
+            {
+                applied = TryApply();
+            }
+            catch (Exception ex)
+            {
+                Log.Exception("MMR-S3 max turn rate patch", ex);
+            }
+        }
+
+        private static bool TryApply()
+        {
+            HashSet<Missile> processed = new HashSet<Missile>();
+            int aam1Objects = 0;
+            int prefabMembers = 0;
+            int prefabChanged = 0;
+            int instanceMembers = 0;
+            int instanceChanged = 0;
+
+            foreach (GameObject gameObject in Resources.FindObjectsOfTypeAll<GameObject>())
+            {
+                if (gameObject == null)
+                    continue;
+
+                if (ObjectNameUtility.RemoveCloneSuffix(gameObject.name) != AAM1Name)
+                    continue;
+
+                aam1Objects++;
+                Missile[] missiles = gameObject.GetComponentsInChildren<Missile>(true);
+                if (missiles == null || missiles.Length == 0)
+                    continue;
+
+                GameObject rootObject = gameObject;
+                if (gameObject.transform != null && gameObject.transform.root != null)
+                    rootObject = gameObject.transform.root.gameObject;
+
+                bool isPrefabAsset = ObjectNameUtility.IsPrefabAsset(rootObject);
+                foreach (Missile missile in missiles)
+                {
+                    if (missile == null || missile.gameObject == null)
+                        continue;
+
+                    if (!processed.Add(missile))
+                        continue;
+
+                    if (TrySetMaxTurnRate(missile, out bool wasChanged))
+                    {
+                        if (isPrefabAsset)
+                        {
+                            prefabMembers++;
+                            if (wasChanged)
+                                prefabChanged++;
+                        }
+                        else
+                        {
+                            instanceMembers++;
+                            if (wasChanged)
+                                instanceChanged++;
+                        }
+                    }
+                }
+            }
+
+            foreach (Missile missile in Resources.FindObjectsOfTypeAll<Missile>())
+            {
+                if (missile == null || missile.gameObject == null)
+                    continue;
+
+                if (!ObjectNameUtility.IsUnderNamedObject(missile.gameObject, AAM1Name))
+                    continue;
+
+                if (!processed.Add(missile))
+                    continue;
+
+                GameObject rootObject = missile.gameObject;
+                if (missile.transform != null && missile.transform.root != null)
+                    rootObject = missile.transform.root.gameObject;
+
+                bool isPrefabAsset = ObjectNameUtility.IsPrefabAsset(rootObject);
+                if (TrySetMaxTurnRate(missile, out bool wasChanged))
+                {
+                    if (isPrefabAsset)
+                    {
+                        prefabMembers++;
+                        if (wasChanged)
+                            prefabChanged++;
+                    }
+                    else
+                    {
+                        instanceMembers++;
+                        if (wasChanged)
+                            instanceChanged++;
+                    }
+                }
+            }
+
+            if (aam1Objects == 0 && processed.Count == 0)
+            {
+                MissingMemberLog.WarnOnce(
+                    "MMRS3MaxTurnRate.Waiting",
+                    "[MMR-S3 Max Turn Rate] No AAM1 objects or Missile components under AAM1 found yet. Will retry when another WeaponManager awakens.");
+                return false;
+            }
+
+            if (prefabMembers + instanceMembers == 0)
+            {
+                MissingMemberLog.ErrorOnce(
+                    "MMRS3MaxTurnRate.NoUsableMissileMember",
+                    $"[MMR-S3 Max Turn Rate] Found {aam1Objects} AAM1 object(s) and {processed.Count} Missile candidate(s), but none had a usable 'maxTurnRate' member.");
+                return false;
+            }
+
+            if (prefabMembers == 0)
+            {
+                MissingMemberLog.WarnOnce(
+                    "MMRS3MaxTurnRate.PrefabWaiting",
+                    "[MMR-S3 Max Turn Rate] Found AAM1 Missile component(s), but no AAM1 prefab asset was modified yet. Will retry when another WeaponManager awakens.");
+                return false;
+            }
+
+            if (prefabChanged + instanceChanged > 0)
+                Log.Info($"[MMR-S3 Max Turn Rate] Set Missile.maxTurnRate to {RuntimeSettings.MMRS3MaxTurnRate} on {prefabChanged} prefab member(s) and {instanceChanged} active instance member(s).");
+            else
+                Log.Info("[MMR-S3 Max Turn Rate] AAM1 Missile component(s) were already at the configured max turn rate.");
+
+            return true;
+        }
+
+        private static bool TrySetMaxTurnRate(Missile missile, out bool changed)
+        {
+            changed = false;
+
+            Traverse traverse = Traverse.Create(missile);
+            Traverse field = traverse.Field("maxTurnRate");
+            if (field.FieldExists())
+            {
+                float current = field.GetValue<float>();
+                if (current != RuntimeSettings.MMRS3MaxTurnRate)
+                {
+                    field.SetValue(RuntimeSettings.MMRS3MaxTurnRate);
+                    changed = true;
+                }
+
+                return true;
+            }
+
+            Traverse property = traverse.Property("maxTurnRate");
+            if (property.PropertyExists())
+            {
+                float current = property.GetValue<float>();
+                if (current != RuntimeSettings.MMRS3MaxTurnRate)
+                {
+                    property.SetValue(RuntimeSettings.MMRS3MaxTurnRate);
+                    changed = true;
+                }
+
+                return true;
+            }
+
+            MissingMemberLog.ErrorOnce(
+                "Missile.maxTurnRate.AAM1",
+                $"[MMR-S3 Max Turn Rate] Missile component on '{ObjectNameUtility.GetHierarchyPath(missile.gameObject)}' is missing field or property 'maxTurnRate'.");
+
+            return false;
         }
     }
 
@@ -2914,6 +3175,923 @@ namespace BalanceAndVarietyRework
     }
 
 
+
+    // ========================================================================
+    // Shard Class Corvette single magazine cannon patch.
+    // Hooks Gun.Awake to ensure magazineCapacity and magazines are set BEFORE
+    // Gun.Awake calculates maxMagazines, bulletsLoaded, and ammo.
+    // Targets: Corvette1/bow1/turret_F/cannon_F
+    // ========================================================================
+    [HarmonyPatch(typeof(Gun), "Awake")]
+    public static class CorvetteSingleMagazinePatch
+    {
+        private const string CorvetteRootContains = "Corvette1";
+        private const string CannonPath = "bow1/turret_F/cannon_F";
+        private const string CannonObjectName = "cannon_F";
+        private static readonly HashSet<string> appliedLogKeys = new HashSet<string>();
+
+        public static void Prefix(Gun __instance)
+        {
+            if (!RuntimeSettings.Captured)
+            {
+                Log.Error("Shard Class Corvette single magazine cannon patch ran before RuntimeSettings.Capture. This patch will be skipped.");
+                return;
+            }
+
+            if (!RuntimeSettings.EnableCorvetteSingleMagazine)
+                return;
+
+            try
+            {
+                if (__instance == null || __instance.gameObject == null || __instance.transform == null)
+                    return;
+
+                string rootName = ObjectNameUtility.GetCleanRootName(__instance.gameObject);
+                if (string.IsNullOrEmpty(rootName))
+                    return;
+
+                if (rootName.IndexOf(CorvetteRootContains, StringComparison.OrdinalIgnoreCase) < 0)
+                    return;
+
+                if (!IsTargetCannon(__instance, rootName))
+                    return;
+
+                ApplyToGun(__instance, rootName);
+            }
+            catch (Exception ex)
+            {
+                Log.Exception("Shard Class Corvette single magazine cannon patch", ex);
+            }
+        }
+
+        private static bool IsTargetCannon(Gun gun, string rootName)
+        {
+            string cleanGunObjectName = ObjectNameUtility.RemoveCloneSuffix(gun.gameObject.name);
+            if (cleanGunObjectName != CannonObjectName)
+                return false;
+
+            Transform root = gun.transform.root;
+            if (root == null)
+                return false;
+
+            Transform cannon = root.Find(CannonPath);
+            if (cannon == null)
+            {
+                MissingMemberLog.ErrorOnce(
+                    $"CorvetteSingleMagazine.PathMissing|{rootName}",
+                    $"[Corvette Single Magazine] '{rootName}' is missing cannon path '{CannonPath}'. Expected '{rootName}/{CannonPath}'.");
+                return false;
+            }
+
+            if (cannon != gun.transform && !gun.transform.IsChildOf(cannon))
+            {
+                MissingMemberLog.ErrorOnce(
+                    $"CorvetteSingleMagazine.UnexpectedCannonTransform|{rootName}",
+                    $"[Corvette Single Magazine] Found '{CannonPath}' on '{rootName}', but the Gun component is not on that transform or one of its children.");
+                return false;
+            }
+
+            return true;
+        }
+
+        private static void ApplyToGun(Gun gun, string rootName)
+        {
+            Traverse traverse = Traverse.Create(gun);
+            Traverse capField = traverse.Field("magazineCapacity");
+            Traverse magsField = traverse.Field("magazines");
+
+            if (!capField.FieldExists())
+            {
+                MissingMemberLog.ErrorOnce(
+                    $"CorvetteSingleMagazine.magazineCapacity|{rootName}",
+                    $"[Corvette Single Magazine] Gun on '{rootName}/{CannonPath}' is missing field 'magazineCapacity'.");
+                return;
+            }
+
+            if (!magsField.FieldExists())
+            {
+                MissingMemberLog.ErrorOnce(
+                    $"CorvetteSingleMagazine.magazines|{rootName}",
+                    $"[Corvette Single Magazine] Gun on '{rootName}/{CannonPath}' is missing field 'magazines'.");
+                return;
+            }
+
+            int currentCap = capField.GetValue<int>();
+            int currentMags = magsField.GetValue<int>();
+            bool changed = false;
+
+            if (currentCap != RuntimeSettings.CorvetteCannonMagazineCapacity)
+            {
+                capField.SetValue(RuntimeSettings.CorvetteCannonMagazineCapacity);
+                changed = true;
+            }
+
+            if (currentMags != RuntimeSettings.CorvetteCannonMagazineCount)
+            {
+                magsField.SetValue(RuntimeSettings.CorvetteCannonMagazineCount);
+                changed = true;
+            }
+
+            if (changed)
+            {
+                string logKey = $"CorvetteSingleMagazine.Applied|{rootName}|{RuntimeSettings.CorvetteCannonMagazineCapacity}|{RuntimeSettings.CorvetteCannonMagazineCount}";
+                if (appliedLogKeys.Add(logKey))
+                {
+                    Log.Info(
+                        $"[Corvette Single Magazine] Set Gun.magazineCapacity={RuntimeSettings.CorvetteCannonMagazineCapacity} " +
+                        $"and Gun.magazines={RuntimeSettings.CorvetteCannonMagazineCount} on '{rootName}/{CannonPath}' before Awake initialization.");
+                }
+            }
+        }
+    }
+
+
+
+    // ========================================================================
+    // Dynamo Class Destroyer railgun self-destruct VFX patch.
+    // Hooks Gun.Awake to ensure selfDestructEffect is set BEFORE
+    // Gun.Awake initializes the weapon.
+    // Targets: Destroyer1/Hull_CF/Hull_CFF/turret_F/cannon_F
+    // ========================================================================
+    [HarmonyPatch(typeof(Gun), "Awake")]
+    public static class DynamoRailgunSelfDestructPatch
+    {
+        private const string DestroyerRootContains = "Destroyer1";
+        private const string CannonPath = "Hull_CF/Hull_CFF/turret_F/cannon_F";
+        private const string CannonObjectName = "cannon_F";
+        private const string PrefabName = "explosion_10kg";
+        private static readonly HashSet<string> appliedLogKeys = new HashSet<string>();
+        private static GameObject cachedPrefab;
+
+        public static void Prefix(Gun __instance)
+        {
+            if (!RuntimeSettings.Captured)
+            {
+                Log.Error("Dynamo railgun self-destruct patch ran before RuntimeSettings.Capture. This patch will be skipped.");
+                return;
+            }
+
+            if (!RuntimeSettings.EnableDynamoRailgunSelfDestructVFX)
+                return;
+
+            try
+            {
+                if (__instance == null || __instance.gameObject == null || __instance.transform == null)
+                    return;
+
+                string rootName = ObjectNameUtility.GetCleanRootName(__instance.gameObject);
+                if (string.IsNullOrEmpty(rootName))
+                    return;
+
+                if (rootName.IndexOf(DestroyerRootContains, StringComparison.OrdinalIgnoreCase) < 0)
+                    return;
+
+                if (!IsTargetCannon(__instance, rootName))
+                    return;
+
+                ApplyToGun(__instance, rootName);
+            }
+            catch (Exception ex)
+            {
+                Log.Exception("Dynamo railgun self-destruct patch", ex);
+            }
+        }
+
+        private static bool IsTargetCannon(Gun gun, string rootName)
+        {
+            string cleanGunObjectName = ObjectNameUtility.RemoveCloneSuffix(gun.gameObject.name);
+            if (cleanGunObjectName != CannonObjectName)
+                return false;
+
+            Transform root = gun.transform.root;
+            if (root == null)
+                return false;
+
+            Transform cannon = root.Find(CannonPath);
+            if (cannon == null)
+            {
+                MissingMemberLog.ErrorOnce(
+                    $"DynamoRailgun.PathMissing|{rootName}",
+                    $"[Dynamo Railgun] '{rootName}' is missing cannon path '{CannonPath}'. Expected '{rootName}/{CannonPath}'.");
+                return false;
+            }
+
+            if (cannon != gun.transform && !gun.transform.IsChildOf(cannon))
+            {
+                MissingMemberLog.ErrorOnce(
+                    $"DynamoRailgun.UnexpectedCannonTransform|{rootName}",
+                    $"[Dynamo Railgun] Found '{CannonPath}' on '{rootName}', but the Gun component is not on that transform or one of its children.");
+                return false;
+            }
+
+            return true;
+        }
+
+        private static void ApplyToGun(Gun gun, string rootName)
+        {
+            if (cachedPrefab == null)
+            {
+                foreach (GameObject go in Resources.FindObjectsOfTypeAll<GameObject>())
+                {
+                    if (go != null && go.name == PrefabName)
+                    {
+                        cachedPrefab = go;
+                        break;
+                    }
+                }
+            }
+
+            if (cachedPrefab == null)
+            {
+                MissingMemberLog.ErrorOnce(
+                    "DynamoRailgun.PrefabMissing",
+                    $"[Dynamo Railgun] Could not find prefab '{PrefabName}' in loaded resources.");
+                return;
+            }
+
+            Traverse traverse = Traverse.Create(gun);
+            bool found = false;
+            bool alreadySet = false;
+
+            Traverse effectField = traverse.Field("selfDestructEffect");
+            if (effectField.FieldExists())
+            {
+                found = true;
+                object currentVal = effectField.GetValue();
+                if (currentVal is GameObject currentGo && currentGo == cachedPrefab)
+                    alreadySet = true;
+                else
+                    effectField.SetValue(cachedPrefab);
+            }
+            else
+            {
+                Traverse effectProp = traverse.Property("selfDestructEffect");
+                if (effectProp.PropertyExists())
+                {
+                    found = true;
+                    object currentVal = effectProp.GetValue();
+                    if (currentVal is GameObject currentGo && currentGo == cachedPrefab)
+                        alreadySet = true;
+                    else
+                        effectProp.SetValue(cachedPrefab);
+                }
+            }
+
+            if (!found)
+            {
+                MissingMemberLog.ErrorOnce(
+                    $"DynamoRailgun.selfDestructEffect|{rootName}",
+                    $"[Dynamo Railgun] Gun on '{rootName}/{CannonPath}' is missing field or property 'selfDestructEffect'.");
+                return;
+            }
+
+            if (alreadySet)
+                return;
+
+            string logKey = $"DynamoRailgun.Applied|{rootName}";
+            if (appliedLogKeys.Add(logKey))
+            {
+                Log.Info(
+                    $"[Dynamo Railgun] Set Gun.selfDestructEffect='{PrefabName}' on '{rootName}/{CannonPath}' before Awake initialization.");
+            }
+        }
+    }
+
+    // ========================================================================
+    // Arresting cable definitions and runtime injection system.
+    // This system polls after scene loads because carrier objects may not
+    // raise WeaponManager.Awake at a useful time and may spawn after the
+    // first scene pass.
+    // ========================================================================
+    internal sealed class ArrestingCableInjection
+    {
+        public int CableNumber;
+        public string ParentPath;
+        public Vector3 LocalPosition;
+    }
+
+    internal sealed class ArrestingCableCarrierDefinition
+    {
+        public string Label;
+        public string RootName;
+        public string FallbackRootContains;
+        public string ValidationChildPath;
+        public float? ArrestorGearDamping;
+        public float? ArrestorGearSpring;
+        public ArrestingCableInjection[] Injections;
+    }
+
+    internal static class ArrestingCableSystem
+    {
+        private const string SourceRootName = "FleetCarrier1";
+        private const string SourceCablePath = "hull_R/hull_R2/arrestorCable1";
+        private const string CableBaseName = "arrestorCable";
+        private const string ArrestorGearComponentName = "ArrestorGear";
+        private const string WireNumberMemberName = "wireNumber";
+        private const string DampingMemberName = "damping";
+        private const string SpringMemberName = "spring";
+
+        private static readonly BindingFlags WireNumberBindingFlags =
+            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static;
+
+        private static Plugin plugin;
+        private static bool initialized;
+        private static bool awakeApplyQueued;
+        private static Coroutine activePoll;
+        private static GameObject cachedSourceCable;
+        private static List<ArrestingCableCarrierDefinition> definitions = new List<ArrestingCableCarrierDefinition>();
+        private static readonly HashSet<string> diagnosticLogKeys = new HashSet<string>();
+
+        public static void Initialize(Plugin owner)
+        {
+            if (initialized)
+                return;
+
+            if (owner == null)
+            {
+                Log.Error("ArrestingCableSystem.Initialize was called with a null plugin instance.");
+                return;
+            }
+
+            if (!RuntimeSettings.Captured)
+            {
+                Log.Error("ArrestingCableSystem.Initialize was called before RuntimeSettings.Capture. Arresting cables will not run.");
+                return;
+            }
+
+            plugin = owner;
+            definitions.Clear();
+
+            if (RuntimeSettings.EnableAnnexArrestingCables)
+            {
+                definitions.Add(new ArrestingCableCarrierDefinition
+                {
+                    Label = "Annex Arresting Cables",
+                    RootName = "AssaultCarrier1",
+                    FallbackRootContains = "AssaultCarrier1",
+                    ValidationChildPath = "hull_RL",
+                    Injections = new ArrestingCableInjection[]
+                    {
+                        new ArrestingCableInjection
+                        {
+                            CableNumber = 1,
+                            ParentPath = "hull_RL/hull_RR/hull_wellDeck/hull_RRL",
+                            LocalPosition = new Vector3(7.61999989f, 18.4200001f, -17.5900002f)
+                        },
+                        new ArrestingCableInjection
+                        {
+                            CableNumber = 2,
+                            ParentPath = "hull_RL/hull_RR/hull_wellDeck/hull_RRL/deck_RR",
+                            LocalPosition = new Vector3(2.8526125f, 1.57768631f, -17.1718292f)
+                        },
+                        new ArrestingCableInjection
+                        {
+                            CableNumber = 3,
+                            ParentPath = "hull_RL/hull_RR/hull_wellDeck/hull_RRL/deck_RR",
+                            LocalPosition = new Vector3(2.8526125f, 1.57768631f, 2.82816696f)
+                        }
+                    }
+                });
+            }
+
+            if (RuntimeSettings.EnableCursorLFDArrestingCables)
+            {
+                definitions.Add(new ArrestingCableCarrierDefinition
+                {
+                    Label = "Cursor LFD Arresting Cables",
+                    RootName = "SmallCarrier1",
+                    FallbackRootContains = "SmallCarrier1",
+                    ValidationChildPath = "smallCarrier1_hull_R",
+                    ArrestorGearDamping = 7000f,
+                    ArrestorGearSpring = 8000f,
+                    Injections = new ArrestingCableInjection[]
+                    {
+                        new ArrestingCableInjection
+                        {
+                            CableNumber = 1,
+                            ParentPath = "smallCarrier1_hull_R",
+                            LocalPosition = new Vector3(4.53056812f, 4.13252401f, -5.5f)
+                        },
+                        new ArrestingCableInjection
+                        {
+                            CableNumber = 2,
+                            ParentPath = "smallCarrier1_hull_R",
+                            LocalPosition = new Vector3(4.53056812f, 4.13252401f, 9.64999962f)
+                        },
+                        new ArrestingCableInjection
+                        {
+                            CableNumber = 3,
+                            ParentPath = "",
+                            LocalPosition = new Vector3(4.53056812f, 4.13252401f, 4.73827934f)
+                        }
+                    }
+                });
+            }
+
+            initialized = true;
+
+            if (definitions.Count == 0)
+            {
+                Log.Info("Arresting cable system has no enabled features.");
+                return;
+            }
+
+            SceneManager.sceneLoaded += OnSceneLoaded;
+            StartPoll(120f);
+
+            Log.Info($"Arresting cable system initialized. Enabled feature(s): {definitions.Count}.");
+        }
+
+        public static void NotifyWeaponManagerAwake()
+        {
+            if (!initialized || awakeApplyQueued || plugin == null || definitions.Count == 0)
+                return;
+
+            awakeApplyQueued = true;
+            plugin.StartCoroutine(DelayedApply(new float[] { 0.5f, 2f, 5f, 10f }, () => awakeApplyQueued = false));
+        }
+
+        private static void OnSceneLoaded(Scene scene, LoadSceneMode mode)
+        {
+            if (!initialized || plugin == null || definitions.Count == 0)
+                return;
+
+            StartPoll(90f);
+        }
+
+        private static void StartPoll(float duration)
+        {
+            if (plugin == null)
+                return;
+
+            if (activePoll != null)
+                plugin.StopCoroutine(activePoll);
+
+            activePoll = plugin.StartCoroutine(Poll(duration));
+        }
+
+        private static IEnumerator Poll(float duration)
+        {
+            yield return new WaitForSecondsRealtime(0.5f);
+
+            float endTime = Time.unscaledTime + Mathf.Max(1f, duration);
+            while (Time.unscaledTime < endTime)
+            {
+                ApplyAll();
+                yield return new WaitForSecondsRealtime(2f);
+            }
+
+            ApplyAll();
+        }
+
+        private static IEnumerator DelayedApply(float[] delays, Action callback = null)
+        {
+            foreach (float delay in delays)
+            {
+                yield return new WaitForSecondsRealtime(delay);
+                ApplyAll();
+            }
+
+            callback?.Invoke();
+        }
+
+        private static void ApplyAll()
+        {
+            if (!RuntimeSettings.Captured || definitions.Count == 0)
+                return;
+
+            try
+            {
+                GameObject sourceCable = EnsureSourceCable();
+                if (sourceCable == null)
+                    return;
+
+                foreach (ArrestingCableCarrierDefinition definition in definitions)
+                {
+                    try
+                    {
+                        ApplyDefinition(definition, sourceCable);
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Exception($"Arresting cable application for '{definition.Label}'", ex);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Exception("Arresting cable system", ex);
+            }
+        }
+
+        private static void ApplyDefinition(ArrestingCableCarrierDefinition definition, GameObject sourceCable)
+        {
+            if (definition == null || definition.Injections == null || definition.Injections.Length == 0)
+            {
+                Log.Error("[Arresting Cables] Encountered an invalid arresting cable definition.");
+                return;
+            }
+
+            HashSet<GameObject> roots = FindTargetRoots(definition);
+            if (roots.Count == 0)
+            {
+                MissingMemberLog.WarnOnce(
+                    $"ArrestingCables.{definition.Label}.Waiting",
+                    $"[{definition.Label}] No scene root matching '{definition.RootName}' found yet. Will keep polling.");
+                return;
+            }
+
+            foreach (GameObject root in roots)
+            {
+                try
+                {
+                    ApplyToRoot(definition, root, sourceCable);
+                }
+                catch (Exception ex)
+                {
+                    Log.Exception($"Arresting cable injection on '{root?.name}'", ex);
+                }
+            }
+        }
+
+        private static GameObject EnsureSourceCable()
+        {
+            if (cachedSourceCable != null)
+                return cachedSourceCable;
+
+            cachedSourceCable = FindSourceCable();
+            if (cachedSourceCable == null)
+            {
+                MissingMemberLog.WarnOnce(
+                    "ArrestingCables.SourceWaiting",
+                    $"[Arresting Cables] No source arresting cable '{SourceRootName}/{SourceCablePath}' found yet. Will keep polling.");
+                return null;
+            }
+
+            if (diagnosticLogKeys.Add("ArrestingCables.SourceFound"))
+            {
+                Log.Info($"[Arresting Cables] Using source cable '{ObjectNameUtility.GetHierarchyPath(cachedSourceCable)}'.");
+            }
+
+            return cachedSourceCable;
+        }
+
+        private static GameObject FindSourceCable()
+        {
+            foreach (GameObject gameObject in Resources.FindObjectsOfTypeAll<GameObject>())
+            {
+                if (gameObject == null || gameObject.transform == null)
+                    continue;
+
+                string cleanName = ObjectNameUtility.RemoveCloneSuffix(gameObject.name);
+                if (string.IsNullOrEmpty(cleanName))
+                    continue;
+
+                bool exact = cleanName.Equals(SourceRootName, StringComparison.OrdinalIgnoreCase);
+                bool partial = cleanName.IndexOf(SourceRootName, StringComparison.OrdinalIgnoreCase) >= 0;
+                if (!exact && !partial)
+                    continue;
+
+                Transform cable = FindChildPath(gameObject.transform, SourceCablePath);
+                if (cable != null && cable.gameObject != null)
+                    return cable.gameObject;
+            }
+
+            return null;
+        }
+
+        private static HashSet<GameObject> FindTargetRoots(ArrestingCableCarrierDefinition definition)
+        {
+            List<GameObject> exactMatches = new List<GameObject>();
+            List<GameObject> fallbackMatches = new List<GameObject>();
+
+            foreach (GameObject gameObject in Resources.FindObjectsOfTypeAll<GameObject>())
+            {
+                if (gameObject == null || gameObject.transform == null)
+                    continue;
+
+                if (ObjectNameUtility.IsPrefabAsset(gameObject))
+                    continue;
+
+                string cleanName = ObjectNameUtility.RemoveCloneSuffix(gameObject.name);
+                if (string.IsNullOrEmpty(cleanName))
+                    continue;
+
+                if (cleanName.Equals(definition.RootName, StringComparison.OrdinalIgnoreCase))
+                {
+                    exactMatches.Add(gameObject);
+                }
+                else if (!string.IsNullOrEmpty(definition.FallbackRootContains) &&
+                         cleanName.IndexOf(definition.FallbackRootContains, StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    fallbackMatches.Add(gameObject);
+                }
+            }
+
+            if (exactMatches.Count > 0)
+                return new HashSet<GameObject>(exactMatches);
+
+            HashSet<GameObject> plausibleRoots = new HashSet<GameObject>();
+            foreach (GameObject gameObject in fallbackMatches)
+            {
+                if (IsPlausibleTargetRoot(gameObject, definition))
+                    plausibleRoots.Add(gameObject);
+            }
+
+            return plausibleRoots;
+        }
+
+        private static bool IsPlausibleTargetRoot(GameObject gameObject, ArrestingCableCarrierDefinition definition)
+        {
+            if (gameObject == null || gameObject.transform == null)
+                return false;
+
+            if (gameObject.transform.parent == null || gameObject.transform.root == gameObject.transform)
+                return true;
+
+            if (!string.IsNullOrEmpty(definition.ValidationChildPath) &&
+                FindChildPath(gameObject.transform, definition.ValidationChildPath) != null)
+                return true;
+
+            return false;
+        }
+
+        private static bool ApplyToRoot(ArrestingCableCarrierDefinition definition, GameObject carrierRoot, GameObject sourceCable)
+        {
+            if (carrierRoot == null || carrierRoot.transform == null)
+                return false;
+
+            bool allInjected = true;
+            int injectedCount = 0;
+            int existingCount = 0;
+
+            foreach (ArrestingCableInjection injection in definition.Injections)
+            {
+                if (injection == null)
+                {
+                    Log.Error($"[{definition.Label}] Encountered a null arresting cable injection definition. This injection will be skipped.");
+                    allInjected = false;
+                    continue;
+                }
+
+                if (injection.CableNumber < 1)
+                {
+                    Log.Error($"[{definition.Label}] Injection for '{carrierRoot.name}' has invalid cable number {injection.CableNumber}. This injection will be skipped.");
+                    allInjected = false;
+                    continue;
+                }
+
+                Transform parent = FindChildPath(carrierRoot.transform, injection.ParentPath);
+                if (parent == null)
+                {
+                    MissingMemberLog.ErrorOnce(
+                        $"ArrestingCables.{definition.Label}.ParentMissing|{carrierRoot.name}|{injection.ParentPath}",
+                        $"[{definition.Label}] '{carrierRoot.name}' is missing parent path '{injection.ParentPath}'. Expected '{carrierRoot.name}/{injection.ParentPath}'.");
+                    allInjected = false;
+                    continue;
+                }
+
+                string cableName = CableBaseName + injection.CableNumber;
+                bool wasExisting;
+                GameObject cable = EnsureCable(definition, sourceCable, parent, cableName, injection.LocalPosition, injection.CableNumber, out wasExisting);
+                if (cable == null)
+                {
+                    allInjected = false;
+                    continue;
+                }
+
+                if (wasExisting)
+                    existingCount++;
+                else
+                    injectedCount++;
+            }
+
+            if (!allInjected)
+                return false;
+
+            string logKey = $"ArrestingCables.{definition.Label}.Root|{carrierRoot.GetInstanceID()}";
+            if (diagnosticLogKeys.Add(logKey))
+            {
+                Log.Info($"[{definition.Label}] Ensured arresting cables on '{carrierRoot.name}'. Injected={injectedCount}, already present={existingCount}.");
+            }
+
+            return true;
+        }
+
+        private static GameObject EnsureCable(
+            ArrestingCableCarrierDefinition definition,
+            GameObject sourceCable,
+            Transform parent,
+            string cableName,
+            Vector3 localPosition,
+            int cableNumber,
+            out bool wasExisting)
+        {
+            wasExisting = false;
+
+            Transform existing = FindChildByName(parent, cableName);
+            GameObject cable;
+            if (existing != null)
+            {
+                cable = existing.gameObject;
+                wasExisting = true;
+            }
+            else
+            {
+                try
+                {
+                    cable = UnityEngine.Object.Instantiate(sourceCable, parent, false);
+                }
+                catch (Exception ex)
+                {
+                    Log.Exception($"[{definition.Label}] Instantiating '{cableName}' under '{ObjectNameUtility.GetHierarchyPath(parent.gameObject)}'", ex);
+                    return null;
+                }
+
+                if (cable == null)
+                {
+                    Log.Error($"[{definition.Label}] Failed to instantiate '{cableName}' under '{ObjectNameUtility.GetHierarchyPath(parent.gameObject)}'.");
+                    return null;
+                }
+
+                cable.name = cableName;
+            }
+
+            if (cable.transform == null)
+            {
+                Log.Error($"[{definition.Label}] Cable '{cableName}' has a null transform.");
+                return null;
+            }
+
+            cable.transform.SetParent(parent, false);
+            cable.transform.localPosition = localPosition;
+            cable.transform.localRotation = Quaternion.identity;
+            cable.transform.localEulerAngles = Vector3.zero;
+
+            if (!TryConfigureArrestorGear(definition, cable, cableNumber))
+                return null;
+
+            if (cable.GetComponent<ModifiedStatsFlag>() == null)
+                cable.AddComponent<ModifiedStatsFlag>();
+
+            cable.SetActive(true);
+            return cable;
+        }
+
+        private static Transform FindChildPath(Transform root, string path)
+        {
+            if (root == null)
+                return null;
+
+            if (string.IsNullOrEmpty(path))
+                return root;
+
+            Transform direct = root.Find(path);
+            if (direct != null)
+                return direct;
+
+            string[] segments = path.Split('/');
+            Transform current = root;
+            foreach (string segment in segments)
+            {
+                if (current == null)
+                    return null;
+
+                Transform next = FindChildByName(current, segment);
+                if (next == null)
+                    return null;
+
+                current = next;
+            }
+
+            return current;
+        }
+
+        private static Transform FindChildByName(Transform parent, string name)
+        {
+            if (parent == null || string.IsNullOrEmpty(name))
+                return null;
+
+            for (int i = 0; i < parent.childCount; i++)
+            {
+                Transform child = parent.GetChild(i);
+                if (child != null && ObjectNameUtility.RemoveCloneSuffix(child.name) == name)
+                    return child;
+            }
+
+            return null;
+        }
+
+        private static bool TryConfigureArrestorGear(ArrestingCableCarrierDefinition definition, GameObject cable, int cableNumber)
+        {
+            if (cable == null)
+                return false;
+
+            bool foundArrestorGear = false;
+
+            foreach (Component component in cable.GetComponentsInChildren<Component>(true))
+            {
+                if (component == null)
+                    continue;
+
+                if (component.GetType().Name != ArrestorGearComponentName)
+                    continue;
+
+                foundArrestorGear = true;
+
+                if (!TrySetArrestorGearMember(component, WireNumberMemberName, cableNumber))
+                {
+                    MissingMemberLog.ErrorOnce(
+                        $"ArrestingCables.{definition.Label}.wireNumberMissing|{cable.name}",
+                        $"[{definition.Label}] {ArrestorGearComponentName} on '{cable.name}' is missing field or property '{WireNumberMemberName}'.");
+                    return false;
+                }
+
+                if (definition.ArrestorGearDamping.HasValue &&
+                    !TrySetArrestorGearMember(component, DampingMemberName, definition.ArrestorGearDamping.Value))
+                {
+                    MissingMemberLog.ErrorOnce(
+                        $"ArrestingCables.{definition.Label}.dampingMissing|{cable.name}",
+                        $"[{definition.Label}] {ArrestorGearComponentName} on '{cable.name}' is missing field or property '{DampingMemberName}'.");
+                    return false;
+                }
+
+                if (definition.ArrestorGearSpring.HasValue &&
+                    !TrySetArrestorGearMember(component, SpringMemberName, definition.ArrestorGearSpring.Value))
+                {
+                    MissingMemberLog.ErrorOnce(
+                        $"ArrestingCables.{definition.Label}.springMissing|{cable.name}",
+                        $"[{definition.Label}] {ArrestorGearComponentName} on '{cable.name}' is missing field or property '{SpringMemberName}'.");
+                    return false;
+                }
+            }
+
+            if (!foundArrestorGear)
+            {
+                MissingMemberLog.ErrorOnce(
+                    $"ArrestingCables.{definition.Label}.ArrestorGearMissing|{cable.name}",
+                    $"[{definition.Label}] '{cable.name}' has no component named '{ArrestorGearComponentName}'.");
+                return false;
+            }
+
+            if ((definition.ArrestorGearDamping.HasValue || definition.ArrestorGearSpring.HasValue) &&
+                diagnosticLogKeys.Add($"ArrestingCables.{definition.Label}.TuningApplied"))
+            {
+                Log.Info(
+                    $"[{definition.Label}] Applied ArrestorGear tuning: " +
+                    $"wireNumber per cable" +
+                    $"{(definition.ArrestorGearDamping.HasValue ? $", damping={definition.ArrestorGearDamping.Value}" : "")}" +
+                    $"{(definition.ArrestorGearSpring.HasValue ? $", spring={definition.ArrestorGearSpring.Value}" : "")}. ");
+            }
+
+            return true;
+        }
+
+        private static bool TrySetArrestorGearMember(Component component, string memberName, object value)
+        {
+            try
+            {
+                for (Type type = component.GetType(); type != null && type != typeof(object); type = type.BaseType)
+                {
+                    FieldInfo field = type.GetField(memberName, WireNumberBindingFlags);
+                    if (field != null)
+                    {
+                        field.SetValue(component, Convert.ChangeType(value, field.FieldType, CultureInfo.InvariantCulture));
+                        return true;
+                    }
+
+                    PropertyInfo property = type.GetProperty(memberName, WireNumberBindingFlags);
+                    if (property != null && property.CanWrite)
+                    {
+                        property.SetValue(component, Convert.ChangeType(value, property.PropertyType, CultureInfo.InvariantCulture));
+                        return true;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Exception($"[{ArrestorGearComponentName}.{memberName}] Setting '{memberName}' on '{component?.gameObject?.name}'", ex);
+            }
+
+            return false;
+        }
+    }
+
+    // ========================================================================
+    // Optional Harmony notify hook for arresting cables.
+    // This is not the primary application path. It only gives the system
+    // additional retry opportunities when weapon systems wake up.
+    // ========================================================================
+    [HarmonyPatch(typeof(WeaponManager), "Awake")]
+    public static class ArrestingCableNotifyPatch
+    {
+        [HarmonyPostfix]
+        [HarmonyPriority(Priority.Last)]
+        public static void Postfix()
+        {
+            ArrestingCableSystem.NotifyWeaponManagerAwake();
+        }
+    }
 
     // ========================================================================
     // Canopy glass visibility patch.
