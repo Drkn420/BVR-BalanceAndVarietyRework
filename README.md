@@ -98,6 +98,8 @@ Hardpoint sets start at `0` and increase from left to right in the loadout selec
 - **UH-90 Ibis:**
   - AGR-18 Lynchpin (x14) double and AGR-24 Kingpin (x8) double on hardpoint sets 0 and 1.
   - Asymmetric pylons are always considered separately, so 0 and 1 in this case are the stubs.
+  - Hexhound ATGM x1 on hardpoint sets 4 and 5.
+  - Hexhound Munitions x1 on hardpoint sets 4 and 5.
 
 - **SAH-46 Chicane:**
   - AGR-18 Lynchpin (x14) double and AGR-24 Kingpin (x8) double on its internal bay.

@@ -12,6 +12,8 @@ using System.Text;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 
+
+
 // NOTE: Three blank lines are intentionally kept between distinct code blocks for readability.
 //
 // ============================================================================
@@ -39,12 +41,13 @@ using UnityEngine.SceneManagement;
 //    mark themselves applied after success.
 //
 // ============================================================================
+
 namespace BalanceAndVarietyRework
 {
     [BepInPlugin("com.Draken0015.BVR", "Balance and Variety Rework", BaseVersion)]
     public class Plugin : BaseUnityPlugin
     {
-        public const string BaseVersion = "1.2.4";
+        public const string BaseVersion = "1.2.5";
 
         // Seed format version is separate from mod version so future seed layout
         // changes can fail loudly instead of silently importing wrong data.
@@ -55,7 +58,6 @@ namespace BalanceAndVarietyRework
 
         public static Plugin Instance { get; private set; }
         public static string FullVersionWithHash { get; private set; }
-
         public static List<ConfigEntryBase> AllRegisteredConfigs = new List<ConfigEntryBase>();
 
         // Static references for config binding and seed export.
@@ -64,35 +66,28 @@ namespace BalanceAndVarietyRework
         public static ConfigEntry<float> FlareCountMultiplier;
         public static ConfigEntry<float> FlareRejectionMultiplier;
         public static ConfigEntry<float> MMRS3MaxTurnRate;
-
         public static ConfigEntry<bool> EnableR9LockPersistenceBuff;
         public static ConfigEntry<float> R9LockPersistenceValue;
         public static ConfigEntry<bool> EnableRAM45LockPersistenceBuff;
         public static ConfigEntry<float> RAM45LockPersistenceValue;
-
         public static ConfigEntry<bool> EnableR9SARHRelock;
         public static ConfigEntry<float> R9SARHRelockDelay;
         public static ConfigEntry<int> R9SARHRelockAttempts;
         public static ConfigEntry<bool> EnableRAM45SARHRelock;
         public static ConfigEntry<float> RAM45SARHRelockDelay;
         public static ConfigEntry<int> RAM45SARHRelockAttempts;
-
         public static ConfigEntry<float> ALMC450RCS;
         public static ConfigEntry<float> AGM99RCS;
         public static ConfigEntry<float> AShM300RCS;
         public static ConfigEntry<float> ALND420ktRCS;
-
         public static ConfigEntry<bool> EnableScytheLoftFactor;
         public static ConfigEntry<float> ScytheLoftFactorValue;
         public static ConfigEntry<bool> EnableScimitarLoftFactor;
         public static ConfigEntry<float> ScimitarLoftFactorValue;
-
         public static ConfigEntry<bool> EnableChicaneProxyGun;
         public static ConfigEntry<bool> EnableChicaneBayPylonSymmetryFix;
-
         public static ConfigEntry<bool> EnableMedusaLaserBuff;
         public static ConfigEntry<float> MedusaLaserPowerDraw;
-
         public static ConfigEntry<bool> EnableSpaagSingleMagazine;
         public static ConfigEntry<int> SpaagMagazineCapacity;
         public static ConfigEntry<int> SpaagMagazines;
@@ -112,20 +107,26 @@ namespace BalanceAndVarietyRework
             BindFunctionalConfigs();
             BindBlueprinterWeapons();
             BindCanopyGlass();
-
             TryImportPendingConfigSeed();
 
             // Restart-only semantics:
             // Capture all values after seed import so no later runtime config change
             // can affect already initialized systems.
             RuntimeSettings.Capture();
-
             FinalizeVersionAndHash();
+
             RegisterHarmonyPatches();
-            BlueprintWeaponToggleSystem.Initialize(this);
+            BlueprintWeaponRemovalSystem.Initialize(this);
             ArrestingCableSystem.Initialize(this);
+            ChicaneBayPylonSymmetrySystem.Initialize(this);
 
             Log.Info("BVR - Balance and Variety Rework Mod Loaded!");
+        }
+
+        private void OnDestroy()
+        {
+            BlueprintWeaponRemovalSystem.Shutdown();
+            ChicaneBayPylonSymmetrySystem.Shutdown();
         }
 
         private ConfigEntry<T> BindAndTrack<T>(
@@ -438,7 +439,6 @@ namespace BalanceAndVarietyRework
                     Log.Error("BlueprintWeaponRegistry contains a null definition. This definition will be skipped.");
                     continue;
                 }
-
                 def.ConfigEntry = BindRestartRequired(def.Section, def.Key, def.DefaultValue, def.Description);
             }
         }
@@ -452,7 +452,6 @@ namespace BalanceAndVarietyRework
                     Log.Error("CanopyGlassRegistry contains a null definition. This definition will be skipped.");
                     continue;
                 }
-
                 def.ConfigEntry = BindRestartRequired(def.Section, def.Key, def.DefaultValue, def.Description);
             }
         }
@@ -484,13 +483,11 @@ namespace BalanceAndVarietyRework
         {
             string hash = GenerateConfigHash();
             string seed = GenerateConfigSeed();
-
             FullVersionWithHash = $"{BaseVersion}-{hash}";
 
             SetNoticeValue("Current Config Hash", hash);
             SetNoticeValue("Current Config Seed", seed);
             SetNoticeValue("Mod Version", $"v{BaseVersion}");
-
             Config.Save();
 
             Log.Info($"BVR - Config hash '{hash}' generated for mod version '{BaseVersion}'.");
@@ -504,7 +501,6 @@ namespace BalanceAndVarietyRework
                 Log.Error($"Could not find Important Notice config key '{key}'.");
                 return;
             }
-
             entry.BoxedValue = value;
         }
 
@@ -524,9 +520,11 @@ namespace BalanceAndVarietyRework
                 typeof(SpaagSingleMagazinePatch),
                 typeof(CorvetteSingleMagazinePatch),
                 typeof(DynamoRailgunSelfDestructPatch),
-                typeof(ArrestingCableNotifyPatch),
-                typeof(BlueprintWeaponDisablePatch),
-                typeof(CanopyGlassPatch)
+                typeof(ShipAwakeArrestingCablePatch),
+                typeof(CanopyGlassAwakePatch),
+                typeof(BlueprintWeaponManagerInitPatch),
+                typeof(BlueprintWeaponLoadPatch),
+                typeof(BlueprintAISelectionPatch)
             };
 
             foreach (Type patchType in patchTypes)
@@ -560,7 +558,6 @@ namespace BalanceAndVarietyRework
         private string GeneratePayload(string prefix)
         {
             StringBuilder payload = new StringBuilder();
-
             // Payload format:
             // PREFIX|ModVersion|SeedFormatVersion|Section:Key:Type:Value|...
             payload.Append(prefix)
@@ -570,12 +567,11 @@ namespace BalanceAndVarietyRework
                    .Append(SeedFormatVersion);
 
             foreach (ConfigEntryBase entry in AllRegisteredConfigs
-                         .OrderBy(c => c.Definition.Section)
-                         .ThenBy(c => c.Definition.Key))
+                .OrderBy(c => c.Definition.Section)
+                .ThenBy(c => c.Definition.Key))
             {
                 payload.Append('|').Append(EntryToSeedString(entry));
             }
-
             return payload.ToString();
         }
 
@@ -627,7 +623,6 @@ namespace BalanceAndVarietyRework
                 }
 
                 string seedModVersion = parts[1];
-
                 if (!int.TryParse(parts[2], NumberStyles.Integer, CultureInfo.InvariantCulture, out int seedFormatVersion))
                 {
                     Log.Error("Seed import failed because the seed format version is not a number.");
@@ -705,7 +700,6 @@ namespace BalanceAndVarietyRework
 
                 if (malformed > 0)
                     Log.Warn($"Seed import encountered {malformed} malformed entr{(malformed == 1 ? "y" : "ies")}.");
-
                 if (unknown > 0)
                     Log.Warn($"Seed import ignored {unknown} unknown config entr{(unknown == 1 ? "y" : "ies")}.");
 
@@ -745,50 +739,36 @@ namespace BalanceAndVarietyRework
         {
             if (value == null)
                 return "";
-
             if (value is bool b)
                 return b ? "True" : "False";
-
             if (value is float f)
                 return f.ToString("R", CultureInfo.InvariantCulture);
-
             if (value is double d)
                 return d.ToString("R", CultureInfo.InvariantCulture);
-
             if (value is int i)
                 return i.ToString(CultureInfo.InvariantCulture);
-
             if (value is long l)
                 return l.ToString(CultureInfo.InvariantCulture);
-
             return Convert.ToString(value, CultureInfo.InvariantCulture) ?? "";
         }
 
         private static object ConvertStringToValue(string raw, Type type)
         {
             Type underlying = Nullable.GetUnderlyingType(type) ?? type;
-
             if (underlying == typeof(string))
                 return raw ?? "";
-
             if (string.IsNullOrEmpty(raw))
                 return underlying.IsValueType ? Activator.CreateInstance(underlying) : null;
-
             if (underlying == typeof(bool))
                 return raw == "1" || bool.Parse(raw);
-
             if (underlying == typeof(float))
                 return float.Parse(raw, NumberStyles.Float, CultureInfo.InvariantCulture);
-
             if (underlying == typeof(double))
                 return double.Parse(raw, NumberStyles.Float, CultureInfo.InvariantCulture);
-
             if (underlying == typeof(int))
                 return int.Parse(raw, CultureInfo.InvariantCulture);
-
             if (underlying == typeof(long))
                 return long.Parse(raw, CultureInfo.InvariantCulture);
-
             return Convert.ChangeType(raw, underlying, CultureInfo.InvariantCulture);
         }
 
@@ -806,7 +786,6 @@ namespace BalanceAndVarietyRework
                 return null;
 
             data = data.Replace('-', '+').Replace('_', '/');
-
             int mod = data.Length % 4;
             if (mod == 2)
                 data += "==";
@@ -922,35 +901,28 @@ namespace BalanceAndVarietyRework
         public static float FlareCountMultiplier;
         public static float FlareRejectionMultiplier;
         public static float MMRS3MaxTurnRate;
-
         public static bool EnableR9LockPersistenceBuff;
         public static float R9LockPersistenceValue;
         public static bool EnableRAM45LockPersistenceBuff;
         public static float RAM45LockPersistenceValue;
-
         public static bool EnableR9SARHRelock;
         public static float R9SARHRelockDelay;
         public static int R9SARHRelockAttempts;
         public static bool EnableRAM45SARHRelock;
         public static float RAM45SARHRelockDelay;
         public static int RAM45SARHRelockAttempts;
-
         public static float ALMC450RCS;
         public static float AGM99RCS;
         public static float AShM300RCS;
         public static float ALND420ktRCS;
-
         public static bool EnableScytheLoftFactor;
         public static float ScytheLoftFactorValue;
         public static bool EnableScimitarLoftFactor;
         public static float ScimitarLoftFactorValue;
-
         public static bool EnableChicaneProxyGun;
         public static bool EnableChicaneBayPylonSymmetryFix;
-
         public static bool EnableMedusaLaserBuff;
         public static float MedusaLaserPowerDraw;
-
         public static bool EnableSpaagSingleMagazine;
         public static int SpaagMagazineCapacity;
         public static int SpaagMagazines;
@@ -979,37 +951,28 @@ namespace BalanceAndVarietyRework
             FlareCountMultiplier = SafeFloat(Plugin.FlareCountMultiplier.Value, 2.0f, "Flare Count Multiplier");
             FlareRejectionMultiplier = SafeFloat(Plugin.FlareRejectionMultiplier.Value, 2.0f, "Flare Rejection Multiplier");
             MMRS3MaxTurnRate = SafeFloat(Plugin.MMRS3MaxTurnRate.Value, 45.0f, "MMR-S3 Max Turn Rate");
-
             EnableR9LockPersistenceBuff = Plugin.EnableR9LockPersistenceBuff.Value;
             R9LockPersistenceValue = SafeFloat(Plugin.R9LockPersistenceValue.Value, 3.0f, "R9 Lock Persistence Value");
-
             EnableRAM45LockPersistenceBuff = Plugin.EnableRAM45LockPersistenceBuff.Value;
             RAM45LockPersistenceValue = SafeFloat(Plugin.RAM45LockPersistenceValue.Value, 3.0f, "RAM45 Lock Persistence Value");
-
             EnableR9SARHRelock = Plugin.EnableR9SARHRelock.Value;
             R9SARHRelockDelay = SafeFloat(Plugin.R9SARHRelockDelay.Value, 3.0f, "R9 SARH Relock Delay");
             R9SARHRelockAttempts = Plugin.R9SARHRelockAttempts.Value;
-
             EnableRAM45SARHRelock = Plugin.EnableRAM45SARHRelock.Value;
             RAM45SARHRelockDelay = SafeFloat(Plugin.RAM45SARHRelockDelay.Value, 3.0f, "RAM45 SARH Relock Delay");
             RAM45SARHRelockAttempts = Plugin.RAM45SARHRelockAttempts.Value;
-
             ALMC450RCS = SafeFloat(Plugin.ALMC450RCS.Value, 0.0005f, "ALM-C450 RCS");
             AGM99RCS = SafeFloat(Plugin.AGM99RCS.Value, 0.008f, "AGM-99 RCS");
             AShM300RCS = SafeFloat(Plugin.AShM300RCS.Value, 0.005f, "AShM-300 RCS");
             ALND420ktRCS = SafeFloat(Plugin.ALND420ktRCS.Value, 0.001f, "ALND-4 (20kt) RCS");
-
             EnableScytheLoftFactor = Plugin.EnableScytheLoftFactor.Value;
             ScytheLoftFactorValue = SafeFloat(Plugin.ScytheLoftFactorValue.Value, 0.7f, "Scythe Loft Factor Value");
             EnableScimitarLoftFactor = Plugin.EnableScimitarLoftFactor.Value;
             ScimitarLoftFactorValue = SafeFloat(Plugin.ScimitarLoftFactorValue.Value, 0.1f, "Scimitar Loft Factor Value");
-
             EnableChicaneProxyGun = Plugin.EnableChicaneProxyGun.Value;
             EnableChicaneBayPylonSymmetryFix = Plugin.EnableChicaneBayPylonSymmetryFix.Value;
-
             EnableMedusaLaserBuff = Plugin.EnableMedusaLaserBuff.Value;
             MedusaLaserPowerDraw = SafeFloat(Plugin.MedusaLaserPowerDraw.Value, 60.0f, "Laser Power Draw Value");
-
             EnableSpaagSingleMagazine = Plugin.EnableSpaagSingleMagazine.Value;
             SpaagMagazineCapacity = SafeInt(Plugin.SpaagMagazineCapacity.Value, 1025, "SPAAG Gun Magazine Capacity");
             SpaagMagazines = SafeInt(Plugin.SpaagMagazines.Value, 0, "SPAAG Gun Magazine Count");
@@ -1017,7 +980,6 @@ namespace BalanceAndVarietyRework
             CorvetteCannonMagazineCapacity = SafeInt(Plugin.CorvetteCannonMagazineCapacity.Value, 1206, "Corvette 57mm Cannon Magazine Capacity");
             CorvetteCannonMagazineCount = SafeInt(Plugin.CorvetteCannonMagazineCount.Value, 0, "Corvette 57mm Cannon Magazine Count");
             EnableDynamoRailgunSelfDestructVFX = Plugin.EnableDynamoRailgunSelfDestructVFX.Value;
-
             EnableAnnexArrestingCables = Plugin.EnableAnnexArrestingCables.Value;
             EnableCursorLFDArrestingCables = Plugin.EnableCursorLFDArrestingCables.Value;
 
@@ -1028,7 +990,6 @@ namespace BalanceAndVarietyRework
                     Log.Error("BlueprintWeaponRegistry contains a null definition while capturing runtime settings.");
                     continue;
                 }
-
                 if (definition.ConfigEntry == null)
                 {
                     Log.Error($"Blueprint config entry for [{definition.Section}] {definition.Key} was not bound. Falling back to default value.");
@@ -1047,7 +1008,6 @@ namespace BalanceAndVarietyRework
                     Log.Error("CanopyGlassRegistry contains a null definition while capturing runtime settings.");
                     continue;
                 }
-
                 if (definition.ConfigEntry == null)
                 {
                     Log.Error($"Canopy glass config entry for [{definition.Section}] {definition.Key} was not bound. Falling back to default value.");
@@ -1070,7 +1030,6 @@ namespace BalanceAndVarietyRework
                 Log.Error($"Config value '{name}' is invalid ({value}). Using fallback value {fallback}.");
                 return fallback;
             }
-
             return value;
         }
 
@@ -1081,7 +1040,6 @@ namespace BalanceAndVarietyRework
                 Log.Error($"Config value '{name}' is invalid ({value}). Using fallback value {fallback}.");
                 return fallback;
             }
-
             return value;
         }
     }
@@ -1102,7 +1060,6 @@ namespace BalanceAndVarietyRework
         {
             if (obj == null)
                 return "";
-
             Transform root = obj.transform?.root;
             return RemoveCloneSuffix((root?.gameObject ?? obj).name);
         }
@@ -1111,16 +1068,13 @@ namespace BalanceAndVarietyRework
         {
             if (obj == null || string.IsNullOrEmpty(targetName))
                 return false;
-
             Transform current = obj.transform;
             while (current != null)
             {
                 if (RemoveCloneSuffix(current.gameObject.name) == targetName)
                     return true;
-
                 current = current.parent;
             }
-
             return false;
         }
 
@@ -1128,16 +1082,13 @@ namespace BalanceAndVarietyRework
         {
             if (obj == null)
                 return "<null>";
-
             string path = obj.name;
             Transform current = obj.transform.parent;
-
             while (current != null)
             {
                 path = current.name + "/" + path;
                 current = current.parent;
             }
-
             return path;
         }
 
@@ -1145,7 +1096,6 @@ namespace BalanceAndVarietyRework
         {
             if (obj == null)
                 return false;
-
             try
             {
                 // Prefab assets generally do not belong to a valid scene.
@@ -1185,7 +1135,6 @@ namespace BalanceAndVarietyRework
         {
             if (obj == null || string.IsNullOrEmpty(rootName))
                 return false;
-
             return ObjectNameUtility.IsUnderNamedObject(obj, rootName);
         }
     }
@@ -1197,21 +1146,22 @@ namespace BalanceAndVarietyRework
     // To add a new blueprint toggle:
     //   1. Add a new BlueprintWeaponDefinition below.
     //   2. Ensure Section, Key, Description, and DefaultValue are user-friendly.
-    //   3. Ensure BlueprintKeys and HardpointSets are correct.
+    //   3. Ensure ExactAircraftRootName and ExactBlueprintKeys are correct.
     //   4. No additional binding code is required; Plugin.BindBlueprinterWeapons
     //      handles it automatically.
+    //
+    // Matching rules are intentionally strict:
+    //   - The aircraft root name must exactly equal ExactAircraftRootName.
+    //   - The weapon option identifier must exactly equal one ExactBlueprintKey.
+    //   - No substring matching is allowed.
     // ========================================================================
     internal class BlueprintWeaponDefinition
     {
         public string Section, Key, Description;
         public bool DefaultValue;
-
-        public string[] AircraftRootNames;
-        public string AircraftRootContains, ExcludeRootContains;
-
+        public string ExactAircraftRootName;
         public int[] HardpointSets;
-        public string[] BlueprintKeys;
-
+        public string[] ExactBlueprintKeys;
         public ConfigEntry<bool> ConfigEntry;
         public bool CachedEnabled;
     }
@@ -1220,43 +1170,45 @@ namespace BalanceAndVarietyRework
     {
         public static readonly List<BlueprintWeaponDefinition> Definitions = new List<BlueprintWeaponDefinition>
         {
-            new BlueprintWeaponDefinition { Section = "CI-22 Cricket Changes", Key = "Enable Cricket Kingpin x8 Double", Description = "Enables Blueprinter BVR_Rocket2_4Podx2 on sets 2, 3", DefaultValue = true, AircraftRootNames = new[] { "COIN" }, AircraftRootContains = "COIN", HardpointSets = new[] { 2, 3 }, BlueprintKeys = new[] { "BVR_Rocket2_4Podx2" } },
-            new BlueprintWeaponDefinition { Section = "CI-22 Cricket Changes", Key = "Enable Cricket Lynchpin x14 Double", Description = "Enables Blueprinter BVR_RocketPod1_double on sets 2, 3", DefaultValue = true, AircraftRootNames = new[] { "COIN" }, AircraftRootContains = "COIN", HardpointSets = new[] { 2, 3 }, BlueprintKeys = new[] { "BVR_RocketPod1_double" } },
-            new BlueprintWeaponDefinition { Section = "T/A-30 Compass Changes", Key = "Enable Compass Kingpin x8 Double", Description = "Enables Blueprinter BVR_Rocket2_4Podx2 on set 1", DefaultValue = true, AircraftRootNames = new[] { "trainer" }, AircraftRootContains = "trainer", HardpointSets = new[] { 1 }, BlueprintKeys = new[] { "BVR_Rocket2_4Podx2" } },
-            new BlueprintWeaponDefinition { Section = "T/A-30 Compass Changes", Key = "Enable Compass Lynchpin x14 Double", Description = "Enables Blueprinter BVR_RocketPod1_double on set 1", DefaultValue = true, AircraftRootNames = new[] { "trainer" }, AircraftRootContains = "trainer", HardpointSets = new[] { 1 }, BlueprintKeys = new[] { "BVR_RocketPod1_double" } },
-            new BlueprintWeaponDefinition { Section = "VT-7 Vagrant Changes", Key = "Enable Vagrant Kingpin x8 Double", Description = "Enables Blueprinter BVR_Rocket2_4Podx2 on set 3", DefaultValue = true, AircraftRootNames = new[] { "VTOLTrainer1" }, AircraftRootContains = "VTOLTrainer1", HardpointSets = new[] { 3 }, BlueprintKeys = new[] { "BVR_Rocket2_4Podx2" } },
-            new BlueprintWeaponDefinition { Section = "VT-7 Vagrant Changes", Key = "Enable Vagrant Lynchpin x14 Double", Description = "Enables Blueprinter BVR_RocketPod1_double on set 3", DefaultValue = true, AircraftRootNames = new[] { "VTOLTrainer1" }, AircraftRootContains = "VTOLTrainer1", HardpointSets = new[] { 3 }, BlueprintKeys = new[] { "BVR_RocketPod1_double" } },
-            new BlueprintWeaponDefinition { Section = "UH-90 Ibis Changes", Key = "Enable Ibis Kingpin x8 Double", Description = "Enables Blueprinter BVR_Rocket2_4Podx2 on sets 0, 1", DefaultValue = true, AircraftRootNames = new[] { "UtilityHelo1" }, AircraftRootContains = "UtilityHelo1", HardpointSets = new[] { 0, 1 }, BlueprintKeys = new[] { "BVR_Rocket2_4Podx2" } },
-            new BlueprintWeaponDefinition { Section = "UH-90 Ibis Changes", Key = "Enable Ibis Lynchpin x14 Double", Description = "Enables Blueprinter BVR_RocketPod1_double on sets 0, 1", DefaultValue = true, AircraftRootNames = new[] { "UtilityHelo1" }, AircraftRootContains = "UtilityHelo1", HardpointSets = new[] { 0, 1 }, BlueprintKeys = new[] { "BVR_RocketPod1_double" } },
-            new BlueprintWeaponDefinition { Section = "SAH-46 Chicane Changes", Key = "Enable Chicane Scythe x2", Description = "Enables Blueprinter AAM2_double on set 2", DefaultValue = true, AircraftRootNames = new[] { "AttackHelo1" }, AircraftRootContains = "AttackHelo1", HardpointSets = new[] { 2 }, BlueprintKeys = new[] { "AAM2_double" } },
-            new BlueprintWeaponDefinition { Section = "SAH-46 Chicane Changes", Key = "Enable Chicane Scythe x1", Description = "Enables Blueprinter AAM2_single on set 2", DefaultValue = true, AircraftRootNames = new[] { "AttackHelo1" }, AircraftRootContains = "AttackHelo1", HardpointSets = new[] { 2 }, BlueprintKeys = new[] { "AAM2_single" } },
-            new BlueprintWeaponDefinition { Section = "SAH-46 Chicane Changes", Key = "Enable Chicane Internal Kingpin x8", Description = "Enables Blueprinter BVR_Rocket2_4Podx2_BayDoor on set 1", DefaultValue = true, AircraftRootNames = new[] { "AttackHelo1" }, AircraftRootContains = "AttackHelo1", HardpointSets = new[] { 1 }, BlueprintKeys = new[] { "BVR_Rocket2_4Podx2_BayDoor" } },
-            new BlueprintWeaponDefinition { Section = "SAH-46 Chicane Changes", Key = "Enable Chicane Internal Lynchpin x14", Description = "Enables Blueprinter BVR_RocketPod1_double_BayDoor on set 1", DefaultValue = true, AircraftRootNames = new[] { "AttackHelo1" }, AircraftRootContains = "AttackHelo1", HardpointSets = new[] { 1 }, BlueprintKeys = new[] { "BVR_RocketPod1_double_BayDoor" } },
-            new BlueprintWeaponDefinition { Section = "FS-12 Revoker Changes", Key = "Enable Revoker Kingpin x8 Double", Description = "Enables Blueprinter BVR_Rocket2_4Podx2 on set 2", DefaultValue = true, AircraftRootNames = new[] { "Fighter1" }, AircraftRootContains = "Fighter1", ExcludeRootContains = "SmallFighter1", HardpointSets = new[] { 2 }, BlueprintKeys = new[] { "BVR_Rocket2_4Podx2" } },
-            new BlueprintWeaponDefinition { Section = "FS-12 Revoker Changes", Key = "Enable Revoker Lynchpin x14 Double", Description = "Enables Blueprinter BVR_RocketPod1_double on set 2", DefaultValue = true, AircraftRootNames = new[] { "Fighter1" }, AircraftRootContains = "Fighter1", ExcludeRootContains = "SmallFighter1", HardpointSets = new[] { 2 }, BlueprintKeys = new[] { "BVR_RocketPod1_double" } },
-            new BlueprintWeaponDefinition { Section = "FS-12 Revoker Changes", Key = "Enable Revoker Kingpin x12 Triple", Description = "Enables Blueprinter Rocket2_4Podx3 on set 2", DefaultValue = true, AircraftRootNames = new[] { "Fighter1" }, AircraftRootContains = "Fighter1", ExcludeRootContains = "SmallFighter1", HardpointSets = new[] { 2 }, BlueprintKeys = new[] { "Rocket2_4Podx3" } },
-            new BlueprintWeaponDefinition { Section = "FS-12 Revoker Changes", Key = "Enable Revoker Lynchpin x21 Triple", Description = "Enables Blueprinter RocketPod1_triple on set 2", DefaultValue = true, AircraftRootNames = new[] { "Fighter1" }, AircraftRootContains = "Fighter1", ExcludeRootContains = "SmallFighter1", HardpointSets = new[] { 2 }, BlueprintKeys = new[] { "RocketPod1_triple" } },
-            new BlueprintWeaponDefinition { Section = "FS-20 Vortex Changes", Key = "Enable Vortex Kingpin x8 Double", Description = "Enables Blueprinter BVR_Rocket2_4Podx2 on set 3", DefaultValue = true, AircraftRootNames = new[] { "SmallFighter1" }, AircraftRootContains = "SmallFighter1", HardpointSets = new[] { 3 }, BlueprintKeys = new[] { "BVR_Rocket2_4Podx2" } },
-            new BlueprintWeaponDefinition { Section = "FS-20 Vortex Changes", Key = "Enable Vortex Lynchpin x14 Double", Description = "Enables Blueprinter BVR_RocketPod1_double on set 3", DefaultValue = true, AircraftRootNames = new[] { "SmallFighter1" }, AircraftRootContains = "SmallFighter1", HardpointSets = new[] { 3 }, BlueprintKeys = new[] { "BVR_RocketPod1_double" } },
-            new BlueprintWeaponDefinition { Section = "VL-49 Tarantula Changes", Key = "Enable Tarantula Kingpin x8 Double", Description = "Enables Blueprinter BVR_Rocket2_4Podx2 on sets 4, 5", DefaultValue = true, AircraftRootNames = new[] { "QuadVTOL1" }, AircraftRootContains = "QuadVTOL1", HardpointSets = new[] { 4, 5 }, BlueprintKeys = new[] { "BVR_Rocket2_4Podx2" } },
-            new BlueprintWeaponDefinition { Section = "VL-49 Tarantula Changes", Key = "Enable Tarantula Lynchpin x14 Double", Description = "Enables Blueprinter BVR_RocketPod1_double on sets 4, 5", DefaultValue = true, AircraftRootNames = new[] { "QuadVTOL1" }, AircraftRootContains = "QuadVTOL1", HardpointSets = new[] { 4, 5 }, BlueprintKeys = new[] { "BVR_RocketPod1_double" } },
-            new BlueprintWeaponDefinition { Section = "VL-49 Tarantula Changes", Key = "Enable Tarantula 20mm Rotary Cannon", Description = "Enables Blueprinter BVR_turret_20mm_rotary on set 3", DefaultValue = true, AircraftRootNames = new[] { "QuadVTOL1" }, AircraftRootContains = "QuadVTOL1", HardpointSets = new[] { 3 }, BlueprintKeys = new[] { "BVR_turret_20mm_rotary" } },
-            new BlueprintWeaponDefinition { Section = "VL-49 Tarantula Changes", Key = "Enable Tarantula 57mm Side Mount", Description = "Enables Blueprinter BVR_turret_57mm_SideMount on set 2", DefaultValue = true, AircraftRootNames = new[] { "QuadVTOL1" }, AircraftRootContains = "QuadVTOL1", HardpointSets = new[] { 2 }, BlueprintKeys = new[] { "BVR_turret_57mm_SideMount" } },
-            new BlueprintWeaponDefinition { Section = "VL-49 Tarantula Changes", Key = "Enable Tarantula 57mm Belly Mount", Description = "Enables Blueprinter BVR_turret_57mm_BellyMount on set 2", DefaultValue = true, AircraftRootNames = new[] { "QuadVTOL1" }, AircraftRootContains = "QuadVTOL1", HardpointSets = new[] { 2 }, BlueprintKeys = new[] { "BVR_turret_57mm_BellyMount" } },
-            new BlueprintWeaponDefinition { Section = "VL-49 Tarantula Changes", Key = "Enable Tarantula SPAAG-1 x1", Description = "Enables Blueprinter BVR_SPAAG1x1 on sets 0, 1", DefaultValue = true, AircraftRootNames = new[] { "QuadVTOL1" }, AircraftRootContains = "QuadVTOL1", HardpointSets = new[] { 0, 1 }, BlueprintKeys = new[] { "BVR_SPAAG1x1" } },
-            new BlueprintWeaponDefinition { Section = "VL-49 Tarantula Changes", Key = "Enable Tarantula SPAAG-2 x1", Description = "Enables Blueprinter BVR_SPAAG2x1 on sets 0, 1", DefaultValue = true, AircraftRootNames = new[] { "QuadVTOL1" }, AircraftRootContains = "QuadVTOL1", HardpointSets = new[] { 0, 1 }, BlueprintKeys = new[] { "BVR_SPAAG2x1" } },
-            new BlueprintWeaponDefinition { Section = "VL-49 Tarantula Changes", Key = "Enable Tarantula HLT-MArt x1", Description = "Enables Blueprinter BVR_HLT-MArtx1 on sets 0, 1", DefaultValue = true, AircraftRootNames = new[] { "QuadVTOL1" }, AircraftRootContains = "QuadVTOL1", HardpointSets = new[] { 0, 1 }, BlueprintKeys = new[] { "BVR_HLT-MArtx1" } },
-            new BlueprintWeaponDefinition { Section = "VL-49 Tarantula Changes", Key = "Enable Tarantula Truck2-MLRS x1", Description = "Enables Blueprinter BVR_Truck2-MLRSx1 on sets 0, 1", DefaultValue = true, AircraftRootNames = new[] { "QuadVTOL1" }, AircraftRootContains = "QuadVTOL1", HardpointSets = new[] { 0, 1 }, BlueprintKeys = new[] { "BVR_Truck2-MLRSx1" } },
-            new BlueprintWeaponDefinition { Section = "KR-67 Ifrit Changes", Key = "Enable Ifrit Kingpin x8 Double", Description = "Enables Blueprinter BVR_Rocket2_4Podx2 on set 4", DefaultValue = true, AircraftRootNames = new[] { "Multirole1" }, AircraftRootContains = "Multirole1", HardpointSets = new[] { 4 }, BlueprintKeys = new[] { "BVR_Rocket2_4Podx2" } },
-            new BlueprintWeaponDefinition { Section = "KR-67 Ifrit Changes", Key = "Enable Ifrit Lynchpin x14 Double", Description = "Enables Blueprinter BVR_RocketPod1_double on set 4", DefaultValue = true, AircraftRootNames = new[] { "Multirole1" }, AircraftRootContains = "Multirole1", HardpointSets = new[] { 4 }, BlueprintKeys = new[] { "BVR_RocketPod1_double" } },
-            new BlueprintWeaponDefinition { Section = "EW-25 Medusa Changes", Key = "Enable Medusa Kingpin x8 Double", Description = "Enables Blueprinter BVR_Rocket2_4Podx2 on sets 3, 4", DefaultValue = true, AircraftRootNames = new[] { "EW1" }, AircraftRootContains = "EW1", HardpointSets = new[] { 3, 4 }, BlueprintKeys = new[] { "BVR_Rocket2_4Podx2" } },
-            new BlueprintWeaponDefinition { Section = "EW-25 Medusa Changes", Key = "Enable Medusa Lynchpin x14 Double", Description = "Enables Blueprinter BVR_RocketPod1_double on sets 3, 4", DefaultValue = true, AircraftRootNames = new[] { "EW1" }, AircraftRootContains = "EW1", HardpointSets = new[] { 3, 4 }, BlueprintKeys = new[] { "BVR_RocketPod1_double" } },
-            new BlueprintWeaponDefinition { Section = "EW-25 Medusa Changes", Key = "Enable Medusa Kingpin x12 Triple", Description = "Enables Blueprinter Rocket2_4Podx3 on sets 3, 4", DefaultValue = true, AircraftRootNames = new[] { "EW1" }, AircraftRootContains = "EW1", HardpointSets = new[] { 3, 4 }, BlueprintKeys = new[] { "Rocket2_4Podx3" } },
-            new BlueprintWeaponDefinition { Section = "EW-25 Medusa Changes", Key = "Enable Medusa Lynchpin x21 Triple", Description = "Enables Blueprinter RocketPod1_triple on sets 3, 4", DefaultValue = true, AircraftRootNames = new[] { "EW1" }, AircraftRootContains = "EW1", HardpointSets = new[] { 3, 4 }, BlueprintKeys = new[] { "RocketPod1_triple" } },
-            new BlueprintWeaponDefinition { Section = "EW-25 Medusa Changes", Key = "Enable Medusa RAM-45 x3", Description = "Enables Blueprinter BVR_SAM_Radar1x3 on sets 3, 4", DefaultValue = true, AircraftRootNames = new[] { "EW1" }, AircraftRootContains = "EW1", HardpointSets = new[] { 3, 4 }, BlueprintKeys = new[] { "BVR_SAM_Radar1x3" } },
-            new BlueprintWeaponDefinition { Section = "EW-25 Medusa Changes", Key = "Enable Medusa Internal RAM-45 x3", Description = "Enables Blueprinter BVR_SAM_Radar1x3_Internal on set 1", DefaultValue = true, AircraftRootNames = new[] { "EW1" }, AircraftRootContains = "EW1", HardpointSets = new[] { 1 }, BlueprintKeys = new[] { "BVR_SAM_Radar1x3_Internal" } },
-            new BlueprintWeaponDefinition { Section = "EW-25 Medusa Changes", Key = "Enable Medusa R9 Stratolance x2", Description = "Enables Blueprinter BVR_SAM_Radar2x2 on sets 3, 4", DefaultValue = true, AircraftRootNames = new[] { "EW1" }, AircraftRootContains = "EW1", HardpointSets = new[] { 3, 4 }, BlueprintKeys = new[] { "BVR_SAM_Radar2x2" } },
-            new BlueprintWeaponDefinition { Section = "EW-25 Medusa Changes", Key = "Enable Medusa Internal R9 Stratolance x2", Description = "Enables Blueprinter BVR_SAM_Radar2x2_Internal on set 1", DefaultValue = true, AircraftRootNames = new[] { "EW1" }, AircraftRootContains = "EW1", HardpointSets = new[] { 1 }, BlueprintKeys = new[] { "BVR_SAM_Radar2x2_Internal" } }
+            new BlueprintWeaponDefinition { Section = "CI-22 Cricket Changes", Key = "Enable Cricket Kingpin x8 Double", Description = "Enables Blueprinter BVR_Rocket2_4Podx2 on sets 2, 3", DefaultValue = true, ExactAircraftRootName = "COIN", HardpointSets = new[] { 2, 3 }, ExactBlueprintKeys = new[] { "BVR_Rocket2_4Podx2" } },
+            new BlueprintWeaponDefinition { Section = "CI-22 Cricket Changes", Key = "Enable Cricket Lynchpin x14 Double", Description = "Enables Blueprinter BVR_RocketPod1_double on sets 2, 3", DefaultValue = true, ExactAircraftRootName = "COIN", HardpointSets = new[] { 2, 3 }, ExactBlueprintKeys = new[] { "BVR_RocketPod1_double" } },
+            new BlueprintWeaponDefinition { Section = "T/A-30 Compass Changes", Key = "Enable Compass Kingpin x8 Double", Description = "Enables Blueprinter BVR_Rocket2_4Podx2 on set 1", DefaultValue = true, ExactAircraftRootName = "trainer", HardpointSets = new[] { 1 }, ExactBlueprintKeys = new[] { "BVR_Rocket2_4Podx2" } },
+            new BlueprintWeaponDefinition { Section = "T/A-30 Compass Changes", Key = "Enable Compass Lynchpin x14 Double", Description = "Enables Blueprinter BVR_RocketPod1_double on set 1", DefaultValue = true, ExactAircraftRootName = "trainer", HardpointSets = new[] { 1 }, ExactBlueprintKeys = new[] { "BVR_RocketPod1_double" } },
+            new BlueprintWeaponDefinition { Section = "VT-7 Vagrant Changes", Key = "Enable Vagrant Kingpin x8 Double", Description = "Enables Blueprinter BVR_Rocket2_4Podx2 on set 3", DefaultValue = true, ExactAircraftRootName = "VTOLTrainer1", HardpointSets = new[] { 3 }, ExactBlueprintKeys = new[] { "BVR_Rocket2_4Podx2" } },
+            new BlueprintWeaponDefinition { Section = "VT-7 Vagrant Changes", Key = "Enable Vagrant Lynchpin x14 Double", Description = "Enables Blueprinter BVR_RocketPod1_double on set 3", DefaultValue = true, ExactAircraftRootName = "VTOLTrainer1", HardpointSets = new[] { 3 }, ExactBlueprintKeys = new[] { "BVR_RocketPod1_double" } },
+            new BlueprintWeaponDefinition { Section = "UH-90 Ibis Changes", Key = "Enable Ibis Kingpin x8 Double", Description = "Enables Blueprinter BVR_Rocket2_4Podx2 on sets 0, 1", DefaultValue = true, ExactAircraftRootName = "UtilityHelo1", HardpointSets = new[] { 0, 1 }, ExactBlueprintKeys = new[] { "BVR_Rocket2_4Podx2" } },
+            new BlueprintWeaponDefinition { Section = "UH-90 Ibis Changes", Key = "Enable Ibis Lynchpin x14 Double", Description = "Enables Blueprinter BVR_RocketPod1_double on sets 0, 1", DefaultValue = true, ExactAircraftRootName = "UtilityHelo1", HardpointSets = new[] { 0, 1 }, ExactBlueprintKeys = new[] { "BVR_RocketPod1_double" } },
+            new BlueprintWeaponDefinition { Section = "UH-90 Ibis Changes", Key = "Enable Ibis Hexhound Munitions x1", Description = "Enables Blueprinter BVR_UGV1_Mx1 on sets 4, 5", DefaultValue = true, ExactAircraftRootName = "UtilityHelo1", HardpointSets = new[] { 4, 5 }, ExactBlueprintKeys = new[] { "BVR_UGV1_Mx1" } },
+            new BlueprintWeaponDefinition { Section = "UH-90 Ibis Changes", Key = "Enable Ibis Hexhound ATGM x1", Description = "Enables Blueprinter BVR_UGV1_ATGMx1 on sets 4, 5", DefaultValue = true, ExactAircraftRootName = "UtilityHelo1", HardpointSets = new[] { 4, 5 }, ExactBlueprintKeys = new[] { "BVR_UGV1_ATGMx1" } },
+            new BlueprintWeaponDefinition { Section = "SAH-46 Chicane Changes", Key = "Enable Chicane Scythe x2", Description = "Enables Blueprinter AAM2_double on set 2", DefaultValue = true, ExactAircraftRootName = "AttackHelo1", HardpointSets = new[] { 2 }, ExactBlueprintKeys = new[] { "AAM2_double" } },
+            new BlueprintWeaponDefinition { Section = "SAH-46 Chicane Changes", Key = "Enable Chicane Scythe x1", Description = "Enables Blueprinter AAM2_single on set 2", DefaultValue = true, ExactAircraftRootName = "AttackHelo1", HardpointSets = new[] { 2 }, ExactBlueprintKeys = new[] { "AAM2_single" } },
+            new BlueprintWeaponDefinition { Section = "SAH-46 Chicane Changes", Key = "Enable Chicane Internal Kingpin x8", Description = "Enables Blueprinter BVR_Rocket2_4Podx2_BayDoor on set 1", DefaultValue = true, ExactAircraftRootName = "AttackHelo1", HardpointSets = new[] { 1 }, ExactBlueprintKeys = new[] { "BVR_Rocket2_4Podx2_BayDoor" } },
+            new BlueprintWeaponDefinition { Section = "SAH-46 Chicane Changes", Key = "Enable Chicane Internal Lynchpin x14", Description = "Enables Blueprinter BVR_RocketPod1_double_BayDoor on set 1", DefaultValue = true, ExactAircraftRootName = "AttackHelo1", HardpointSets = new[] { 1 }, ExactBlueprintKeys = new[] { "BVR_RocketPod1_double_BayDoor" } },
+            new BlueprintWeaponDefinition { Section = "FS-12 Revoker Changes", Key = "Enable Revoker Kingpin x8 Double", Description = "Enables Blueprinter BVR_Rocket2_4Podx2 on set 2", DefaultValue = true, ExactAircraftRootName = "Fighter1", HardpointSets = new[] { 2 }, ExactBlueprintKeys = new[] { "BVR_Rocket2_4Podx2" } },
+            new BlueprintWeaponDefinition { Section = "FS-12 Revoker Changes", Key = "Enable Revoker Lynchpin x14 Double", Description = "Enables Blueprinter BVR_RocketPod1_double on set 2", DefaultValue = true, ExactAircraftRootName = "Fighter1", HardpointSets = new[] { 2 }, ExactBlueprintKeys = new[] { "BVR_RocketPod1_double" } },
+            new BlueprintWeaponDefinition { Section = "FS-12 Revoker Changes", Key = "Enable Revoker Kingpin x12 Triple", Description = "Enables Blueprinter Rocket2_4Podx3 on set 2", DefaultValue = true, ExactAircraftRootName = "Fighter1", HardpointSets = new[] { 2 }, ExactBlueprintKeys = new[] { "Rocket2_4Podx3" } },
+            new BlueprintWeaponDefinition { Section = "FS-12 Revoker Changes", Key = "Enable Revoker Lynchpin x21 Triple", Description = "Enables Blueprinter RocketPod1_triple on set 2", DefaultValue = true, ExactAircraftRootName = "Fighter1", HardpointSets = new[] { 2 }, ExactBlueprintKeys = new[] { "RocketPod1_triple" } },
+            new BlueprintWeaponDefinition { Section = "FS-20 Vortex Changes", Key = "Enable Vortex Kingpin x8 Double", Description = "Enables Blueprinter BVR_Rocket2_4Podx2 on set 3", DefaultValue = true, ExactAircraftRootName = "SmallFighter1", HardpointSets = new[] { 3 }, ExactBlueprintKeys = new[] { "BVR_Rocket2_4Podx2" } },
+            new BlueprintWeaponDefinition { Section = "FS-20 Vortex Changes", Key = "Enable Vortex Lynchpin x14 Double", Description = "Enables Blueprinter BVR_RocketPod1_double on set 3", DefaultValue = true, ExactAircraftRootName = "SmallFighter1", HardpointSets = new[] { 3 }, ExactBlueprintKeys = new[] { "BVR_RocketPod1_double" } },
+            new BlueprintWeaponDefinition { Section = "VL-49 Tarantula Changes", Key = "Enable Tarantula Kingpin x8 Double", Description = "Enables Blueprinter BVR_Rocket2_4Podx2 on sets 4, 5", DefaultValue = true, ExactAircraftRootName = "QuadVTOL1", HardpointSets = new[] { 4, 5 }, ExactBlueprintKeys = new[] { "BVR_Rocket2_4Podx2" } },
+            new BlueprintWeaponDefinition { Section = "VL-49 Tarantula Changes", Key = "Enable Tarantula Lynchpin x14 Double", Description = "Enables Blueprinter BVR_RocketPod1_double on sets 4, 5", DefaultValue = true, ExactAircraftRootName = "QuadVTOL1", HardpointSets = new[] { 4, 5 }, ExactBlueprintKeys = new[] { "BVR_RocketPod1_double" } },
+            new BlueprintWeaponDefinition { Section = "VL-49 Tarantula Changes", Key = "Enable Tarantula 20mm Rotary Cannon", Description = "Enables Blueprinter BVR_turret_20mm_rotary on set 3", DefaultValue = true, ExactAircraftRootName = "QuadVTOL1", HardpointSets = new[] { 3 }, ExactBlueprintKeys = new[] { "BVR_turret_20mm_rotary" } },
+            new BlueprintWeaponDefinition { Section = "VL-49 Tarantula Changes", Key = "Enable Tarantula 57mm Side Mount", Description = "Enables Blueprinter BVR_turret_57mm_SideMount on set 2", DefaultValue = true, ExactAircraftRootName = "QuadVTOL1", HardpointSets = new[] { 2 }, ExactBlueprintKeys = new[] { "BVR_turret_57mm_SideMount" } },
+            new BlueprintWeaponDefinition { Section = "VL-49 Tarantula Changes", Key = "Enable Tarantula 57mm Belly Mount", Description = "Enables Blueprinter BVR_turret_57mm_BellyMount on set 2", DefaultValue = true, ExactAircraftRootName = "QuadVTOL1", HardpointSets = new[] { 2 }, ExactBlueprintKeys = new[] { "BVR_turret_57mm_BellyMount" } },
+            new BlueprintWeaponDefinition { Section = "VL-49 Tarantula Changes", Key = "Enable Tarantula SPAAG-1 x1", Description = "Enables Blueprinter BVR_SPAAG1x1 on sets 0, 1", DefaultValue = true, ExactAircraftRootName = "QuadVTOL1", HardpointSets = new[] { 0, 1 }, ExactBlueprintKeys = new[] { "BVR_SPAAG1x1" } },
+            new BlueprintWeaponDefinition { Section = "VL-49 Tarantula Changes", Key = "Enable Tarantula SPAAG-2 x1", Description = "Enables Blueprinter BVR_SPAAG2x1 on sets 0, 1", DefaultValue = true, ExactAircraftRootName = "QuadVTOL1", HardpointSets = new[] { 0, 1 }, ExactBlueprintKeys = new[] { "BVR_SPAAG2x1" } },
+            new BlueprintWeaponDefinition { Section = "VL-49 Tarantula Changes", Key = "Enable Tarantula HLT-MArt x1", Description = "Enables Blueprinter BVR_HLT-MArtx1 on sets 0, 1", DefaultValue = true, ExactAircraftRootName = "QuadVTOL1", HardpointSets = new[] { 0, 1 }, ExactBlueprintKeys = new[] { "BVR_HLT-MArtx1" } },
+            new BlueprintWeaponDefinition { Section = "VL-49 Tarantula Changes", Key = "Enable Tarantula Truck2-MLRS x1", Description = "Enables Blueprinter BVR_Truck2-MLRSx1 on sets 0, 1", DefaultValue = true, ExactAircraftRootName = "QuadVTOL1", HardpointSets = new[] { 0, 1 }, ExactBlueprintKeys = new[] { "BVR_Truck2-MLRSx1" } },
+            new BlueprintWeaponDefinition { Section = "KR-67 Ifrit Changes", Key = "Enable Ifrit Kingpin x8 Double", Description = "Enables Blueprinter BVR_Rocket2_4Podx2 on set 4", DefaultValue = true, ExactAircraftRootName = "Multirole1", HardpointSets = new[] { 4 }, ExactBlueprintKeys = new[] { "BVR_Rocket2_4Podx2" } },
+            new BlueprintWeaponDefinition { Section = "KR-67 Ifrit Changes", Key = "Enable Ifrit Lynchpin x14 Double", Description = "Enables Blueprinter BVR_RocketPod1_double on set 4", DefaultValue = true, ExactAircraftRootName = "Multirole1", HardpointSets = new[] { 4 }, ExactBlueprintKeys = new[] { "BVR_RocketPod1_double" } },
+            new BlueprintWeaponDefinition { Section = "EW-25 Medusa Changes", Key = "Enable Medusa Kingpin x8 Double", Description = "Enables Blueprinter BVR_Rocket2_4Podx2 on sets 3, 4", DefaultValue = true, ExactAircraftRootName = "EW1", HardpointSets = new[] { 3, 4 }, ExactBlueprintKeys = new[] { "BVR_Rocket2_4Podx2" } },
+            new BlueprintWeaponDefinition { Section = "EW-25 Medusa Changes", Key = "Enable Medusa Lynchpin x14 Double", Description = "Enables Blueprinter BVR_RocketPod1_double on sets 3, 4", DefaultValue = true, ExactAircraftRootName = "EW1", HardpointSets = new[] { 3, 4 }, ExactBlueprintKeys = new[] { "BVR_RocketPod1_double" } },
+            new BlueprintWeaponDefinition { Section = "EW-25 Medusa Changes", Key = "Enable Medusa Kingpin x12 Triple", Description = "Enables Blueprinter Rocket2_4Podx3 on sets 3, 4", DefaultValue = true, ExactAircraftRootName = "EW1", HardpointSets = new[] { 3, 4 }, ExactBlueprintKeys = new[] { "Rocket2_4Podx3" } },
+            new BlueprintWeaponDefinition { Section = "EW-25 Medusa Changes", Key = "Enable Medusa Lynchpin x21 Triple", Description = "Enables Blueprinter RocketPod1_triple on sets 3, 4", DefaultValue = true, ExactAircraftRootName = "EW1", HardpointSets = new[] { 3, 4 }, ExactBlueprintKeys = new[] { "RocketPod1_triple" } },
+            new BlueprintWeaponDefinition { Section = "EW-25 Medusa Changes", Key = "Enable Medusa RAM-45 x3", Description = "Enables Blueprinter BVR_SAM_Radar1x3 on sets 3, 4", DefaultValue = true, ExactAircraftRootName = "EW1", HardpointSets = new[] { 3, 4 }, ExactBlueprintKeys = new[] { "BVR_SAM_Radar1x3" } },
+            new BlueprintWeaponDefinition { Section = "EW-25 Medusa Changes", Key = "Enable Medusa Internal RAM-45 x3", Description = "Enables Blueprinter BVR_SAM_Radar1x3_Internal on set 1", DefaultValue = true, ExactAircraftRootName = "EW1", HardpointSets = new[] { 1 }, ExactBlueprintKeys = new[] { "BVR_SAM_Radar1x3_Internal" } },
+            new BlueprintWeaponDefinition { Section = "EW-25 Medusa Changes", Key = "Enable Medusa R9 Stratolance x2", Description = "Enables Blueprinter BVR_SAM_Radar2x2 on sets 3, 4", DefaultValue = true, ExactAircraftRootName = "EW1", HardpointSets = new[] { 3, 4 }, ExactBlueprintKeys = new[] { "BVR_SAM_Radar2x2" } },
+            new BlueprintWeaponDefinition { Section = "EW-25 Medusa Changes", Key = "Enable Medusa Internal R9 Stratolance x2", Description = "Enables Blueprinter BVR_SAM_Radar2x2_Internal on set 1", DefaultValue = true, ExactAircraftRootName = "EW1", HardpointSets = new[] { 1 }, ExactBlueprintKeys = new[] { "BVR_SAM_Radar2x2_Internal" } }
         };
     }
 
@@ -1304,308 +1256,81 @@ namespace BalanceAndVarietyRework
 
 
     // ========================================================================
-    // Runtime blueprint rule used by the toggle system.
+    // Runtime blueprint rule used by the removal system.
+    // Matching is intentionally exact:
+    //   - The cleaned aircraft root name must exactly equal ExactRootName.
+    //   - The weapon option identifier must exactly equal one ExactBlueprintKey.
+    // No substring matching or deeper hierarchy searching is performed.
     // ========================================================================
     internal sealed class BlueprintWeaponRule
     {
-        public string[] RootNames;
-        public string RootContains, ExcludeRootContains, DisplayName;
+        public string ExactRootName;
+        public string DisplayName;
         public bool Enabled;
-        public string[] BlueprintKeys;
+        public string[] ExactBlueprintKeys;
         public int[] HardpointSets;
 
         public bool MatchesAircraft(string rootName)
         {
-            if (string.IsNullOrEmpty(rootName))
+            if (string.IsNullOrEmpty(ExactRootName) || string.IsNullOrEmpty(rootName))
                 return false;
 
-            if (RootNames != null && RootNames.Any(r => string.Equals(r, rootName, StringComparison.OrdinalIgnoreCase)))
-                return true;
-
-            if (!string.IsNullOrEmpty(RootContains))
-            {
-                if (!string.IsNullOrEmpty(ExcludeRootContains) &&
-                    rootName.IndexOf(ExcludeRootContains, StringComparison.OrdinalIgnoreCase) >= 0)
-                {
-                    return false;
-                }
-
-                return rootName.IndexOf(RootContains, StringComparison.OrdinalIgnoreCase) >= 0;
-            }
-
-            return false;
+            // Exact clean root name only. No Contains, no fallback, no guessing.
+            return string.Equals(ExactRootName, rootName, StringComparison.Ordinal);
         }
 
-        public bool MatchesWeapon(object weaponOption)
+        public bool MatchesWeaponOption(object weaponOption)
         {
-            if (BlueprintToggleReflection.IsNull(weaponOption) || BlueprintKeys == null)
+            if (BlueprintRemovalReflection.IsNull(weaponOption) || ExactBlueprintKeys == null)
                 return false;
 
-            List<string> identifiers = BlueprintToggleReflection.GetIdentifiers(weaponOption);
-            return BlueprintKeys.Any(key => identifiers.Any(id => string.Equals(id, key, StringComparison.OrdinalIgnoreCase)));
+            List<string> identifiers = BlueprintRemovalReflection.GetExactIdentifiers(weaponOption);
+            return ExactBlueprintKeys.Any(key => identifiers.Any(id => string.Equals(id, key, StringComparison.Ordinal)));
         }
     }
 
 
 
     // ========================================================================
-    // Blueprint weapon toggle system.
-    // Uses cached startup values only. Runtime config changes are ignored.
+    // Reflection helper for blueprint weapon option removal.
+    // This helper is intentionally narrow:
+    //   - It looks directly for HardpointSet.weaponOptions.
+    //   - It removes matching entries from that collection.
+    //   - It does not recursively search nested weapon/mount/option objects.
     // ========================================================================
-    internal static class BlueprintWeaponToggleSystem
-    {
-        private static Plugin plugin;
-        private static bool initialized;
-        private static bool awakeApplyQueued;
-
-        private static List<BlueprintWeaponRule> rules = new List<BlueprintWeaponRule>();
-        private static readonly HashSet<string> appliedLogKeys = new HashSet<string>();
-        private static readonly HashSet<string> diagnosticLogKeys = new HashSet<string>();
-
-        public static void Initialize(Plugin owner)
-        {
-            if (initialized)
-                return;
-
-            if (owner == null)
-            {
-                Log.Error("BlueprintWeaponToggleSystem.Initialize was called with a null plugin instance.");
-                return;
-            }
-
-            if (!RuntimeSettings.Captured)
-            {
-                Log.Error("BlueprintWeaponToggleSystem.Initialize was called before RuntimeSettings.Capture. Blueprint toggles will not run.");
-                return;
-            }
-
-            plugin = owner;
-
-            rules = BlueprintWeaponRegistry.Definitions.Select(d => new BlueprintWeaponRule
-            {
-                RootNames = d.AircraftRootNames,
-                RootContains = d.AircraftRootContains,
-                ExcludeRootContains = d.ExcludeRootContains,
-                DisplayName = d.Key,
-                Enabled = d.CachedEnabled,
-                BlueprintKeys = d.BlueprintKeys,
-                HardpointSets = d.HardpointSets
-            }).ToList();
-
-            SceneManager.sceneLoaded += (scene, mode) =>
-            {
-                if (plugin != null)
-                    plugin.StartCoroutine(DelayedApply(new[] { 0.5f, 2f, 5f }));
-            };
-
-            plugin.StartCoroutine(Poll());
-            initialized = true;
-
-            Log.Info("Blueprint weapon toggle system initialized using startup-cached config values.");
-        }
-
-        public static void NotifyWeaponManagerAwake(WeaponManager weaponManager)
-        {
-            if (!initialized || awakeApplyQueued)
-                return;
-
-            awakeApplyQueued = true;
-            plugin.StartCoroutine(DelayedApply(new[] { 0.5f, 2f, 5f }, () => awakeApplyQueued = false));
-        }
-
-        private static IEnumerator Poll()
-        {
-            yield return new WaitForSecondsRealtime(2f);
-
-            float endTime = Time.unscaledTime + 60f;
-            while (Time.unscaledTime < endTime)
-            {
-                ApplyAll();
-                yield return new WaitForSecondsRealtime(0.5f);
-            }
-
-            ApplyAll();
-        }
-
-        private static IEnumerator DelayedApply(float[] delays, Action callback = null)
-        {
-            foreach (float delay in delays)
-            {
-                yield return new WaitForSecondsRealtime(delay);
-                ApplyAll();
-            }
-
-            callback?.Invoke();
-        }
-
-        private static void ApplyAll()
-        {
-            foreach (WeaponManager weaponManager in Resources.FindObjectsOfTypeAll<WeaponManager>())
-            {
-                try
-                {
-                    Apply(weaponManager);
-                }
-                catch (Exception ex)
-                {
-                    Log.Exception("Blueprint weapon toggle", ex);
-                }
-            }
-        }
-
-        private static void Apply(WeaponManager weaponManager)
-        {
-            if (BlueprintToggleReflection.IsNull(weaponManager) || weaponManager.transform == null)
-                return;
-
-            string rootName = ObjectNameUtility.GetCleanRootName(weaponManager.transform.root?.gameObject ?? weaponManager.gameObject);
-            if (string.IsNullOrEmpty(rootName))
-                return;
-
-            foreach (BlueprintWeaponRule rule in rules)
-            {
-                if (!rule.MatchesAircraft(rootName))
-                    continue;
-
-                bool disable = !rule.Enabled;
-
-                foreach (int hardpointSet in rule.HardpointSets)
-                {
-                    if (weaponManager.hardpointSets == null)
-                    {
-                        LogOnce($"HardpointArrayNull|{rootName}", $"[Blueprints] WeaponManager on '{rootName}' has null hardpointSets.");
-                        continue;
-                    }
-
-                    if (hardpointSet < 0 || hardpointSet >= weaponManager.hardpointSets.Length)
-                    {
-                        LogOnce(
-                            $"HardpointOutOfRange|{rootName}|{rule.DisplayName}|{hardpointSet}",
-                            $"[Blueprints] Hardpoint set {hardpointSet} for '{rule.DisplayName}' on '{rootName}' is out of range. Count={weaponManager.hardpointSets.Length}.");
-                        continue;
-                    }
-
-                    object hs = weaponManager.hardpointSets[hardpointSet];
-                    if (BlueprintToggleReflection.IsNull(hs))
-                    {
-                        LogOnce(
-                            $"HardpointNull|{rootName}|{hardpointSet}",
-                            $"[Blueprints] Hardpoint set {hardpointSet} on '{rootName}' is null.");
-                        continue;
-                    }
-
-                    IEnumerable options = BlueprintToggleReflection.GetWeaponOptions(hs);
-                    if (options == null)
-                    {
-                        LogOnce(
-                            $"WeaponOptionsMissing|{rootName}|{hardpointSet}",
-                            $"[Blueprints] Could not find weapon options collection in hardpoint set {hardpointSet} on '{rootName}'.");
-                        continue;
-                    }
-
-                    bool foundMatchingWeapon = false;
-
-                    foreach (object option in options)
-                    {
-                        if (!rule.MatchesWeapon(option))
-                            continue;
-
-                        foundMatchingWeapon = true;
-
-                        try
-                        {
-                            bool changed = BlueprintToggleReflection.TrySetDisabled(option, disable, out bool foundDisableMember);
-
-                            if (changed)
-                            {
-                                string logKey = $"{rootName}|{rule.DisplayName}|{hardpointSet}|{disable}";
-                                if (appliedLogKeys.Add(logKey))
-                                {
-                                    Log.Info($"[BVR] {(disable ? "Disabled" : "Enabled")} '{rule.DisplayName}' on {rootName} set {hardpointSet}.");
-                                }
-                            }
-                            else if (!foundDisableMember)
-                            {
-                                LogOnce(
-                                    $"DisableMemberMissing|{rootName}|{rule.DisplayName}|{hardpointSet}",
-                                    $"[Blueprints] Matched '{rule.DisplayName}' on '{rootName}' set {hardpointSet}, but could not find a disable flag on the weapon option.");
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            Log.Exception($"Blueprint toggle for '{rule.DisplayName}' on '{rootName}' set {hardpointSet}", ex);
-                        }
-                    }
-
-                    if (!foundMatchingWeapon)
-                    {
-                        LogOnce(
-                            $"BlueprintWeaponMissing|{rootName}|{rule.DisplayName}|{hardpointSet}",
-                            $"[Blueprints] '{rule.DisplayName}' was not found on '{rootName}' hardpoint set {hardpointSet}. If this aircraft should have it, verify BlueprintKeys and hardpoint set.");
-                    }
-                }
-            }
-        }
-
-        private static void LogOnce(string key, string message)
-        {
-            if (diagnosticLogKeys.Add(key))
-                Log.Warn(message);
-        }
-    }
-
-
-
-    // ========================================================================
-    // Reflection helper for blueprint weapon options.
-    // Kept defensive because the game's internal weapon option layout may be
-    // private or change between versions.
-    // ========================================================================
-    internal static class BlueprintToggleReflection
+    internal static class BlueprintRemovalReflection
     {
         private const BindingFlags Flags =
             BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static;
 
-        private static readonly string[] DisabledMemberNames =
-            { "Disabled", "disabled", "isDisabled", "IsDisabled" };
-
-        private static readonly string[] WeaponOptionCollectionNames =
-            { "weaponOptions", "WeaponOptions", "options", "weapons" };
+        private static readonly string[] WeaponOptionsMemberNames =
+        {
+            "weaponOptions",
+            "WeaponOptions"
+        };
 
         private static readonly string[] IdentifierMemberNames =
-            { "jsonKey", "blueprintKey", "key", "id", "name", "mountName", "weaponName" };
-
-        private static readonly string[] NestedObjectMemberNames =
-            { "mount", "weaponMount", "weaponOption", "option", "weapon" };
-
-        private static readonly string[] PrefabMemberNames =
-            { "prefab", "Prefab", "gameObject", "GameObject" };
+        {
+            "blueprintKey",
+            "jsonKey",
+            "key",
+            "id",
+            "name"
+        };
 
         public static bool IsNull(object obj)
         {
             return obj == null || (obj is UnityEngine.Object unityObject && unityObject == null);
         }
 
-        public static IEnumerable GetWeaponOptions(object hardpointSet)
-        {
-            if (IsNull(hardpointSet))
-                return null;
-
-            foreach (string name in WeaponOptionCollectionNames)
-            {
-                if (TryGet(hardpointSet, name, out object value) && value is IEnumerable enumerable && !(value is string))
-                    return enumerable;
-            }
-
-            return null;
-        }
-
-        public static List<string> GetIdentifiers(object obj)
+        public static List<string> GetExactIdentifiers(object obj)
         {
             List<string> identifiers = new List<string>();
-
             if (IsNull(obj))
                 return identifiers;
+
+            if (obj is string directString)
+                AddIdentifier(identifiers, directString);
 
             if (obj is Component component && component.gameObject != null)
                 AddIdentifier(identifiers, component.gameObject.name);
@@ -1613,107 +1338,178 @@ namespace BalanceAndVarietyRework
             if (obj is UnityEngine.Object unityObject)
                 AddIdentifier(identifiers, unityObject.name);
 
-            foreach (string name in IdentifierMemberNames)
+            foreach (string memberName in IdentifierMemberNames)
             {
-                if (TryGet(obj, name, out object value) && !IsNull(value))
-                {
-                    if (value is string s)
-                        AddIdentifier(identifiers, s);
-                    else if (value is UnityEngine.Object valueUnityObject)
-                        AddIdentifier(identifiers, valueUnityObject.name);
-                    else
-                        AddIdentifier(identifiers, value.ToString());
-                }
-            }
+                if (!TryGet(obj, memberName, out object value) || IsNull(value))
+                    continue;
 
-            foreach (string name in PrefabMemberNames)
-            {
-                if (TryGet(obj, name, out object value) && !IsNull(value))
+                if (value is string stringValue)
                 {
-                    if (value is GameObject gameObject)
-                        AddIdentifier(identifiers, gameObject.name);
-                    else if (value is UnityEngine.Object valueUnityObject)
-                        AddIdentifier(identifiers, valueUnityObject.name);
+                    AddIdentifier(identifiers, stringValue);
+                }
+                else if (value is UnityEngine.Object valueUnityObject)
+                {
+                    AddIdentifier(identifiers, valueUnityObject.name);
                 }
             }
 
             return identifiers;
         }
 
-        public static bool TrySetDisabled(object target, bool disabled, out bool foundDisableMember)
+        public static bool TryRemoveWeaponOptions(
+            object hardpointSet,
+            Func<object, bool> matcher,
+            out int removedCount,
+            out string failure)
         {
-            foundDisableMember = false;
+            removedCount = 0;
+            failure = null;
 
-            if (IsNull(target))
+            if (IsNull(hardpointSet))
+            {
+                failure = "hardpoint set is null";
                 return false;
+            }
 
-            return SetDisabledRecursive(target, disabled, 0, out foundDisableMember);
+            if (matcher == null)
+            {
+                failure = "matcher is null";
+                return false;
+            }
+
+            FieldInfo field;
+            PropertyInfo property;
+            object collection;
+            if (!TryGetWeaponOptionsMember(hardpointSet, out field, out property, out collection))
+            {
+                failure = "missing weaponOptions member";
+                return false;
+            }
+
+            if (IsNull(collection))
+            {
+                failure = "weaponOptions member is null";
+                return false;
+            }
+
+            if (collection is Array array)
+            {
+                List<object> kept = new List<object>();
+
+                foreach (object item in array)
+                {
+                    if (!IsNull(item) && matcher(item))
+                        removedCount++;
+                    else
+                        kept.Add(item);
+                }
+
+                if (removedCount == 0)
+                    return true;
+
+                Type elementType = array.GetType().GetElementType() ?? typeof(object);
+                Array newArray = Array.CreateInstance(elementType, kept.Count);
+
+                for (int i = 0; i < kept.Count; i++)
+                    newArray.SetValue(kept[i], i);
+
+                return TrySetWeaponOptionsMember(hardpointSet, field, property, newArray, out failure);
+            }
+
+            if (collection is IList list)
+            {
+                if (list.IsReadOnly || list.IsFixedSize)
+                {
+                    failure = $"weaponOptions list type '{collection.GetType().Name}' is read-only or fixed-size";
+                    return false;
+                }
+
+                for (int i = list.Count - 1; i >= 0; i--)
+                {
+                    object item = list[i];
+                    if (IsNull(item) || !matcher(item))
+                        continue;
+
+                    list.RemoveAt(i);
+                    removedCount++;
+                }
+
+                return true;
+            }
+
+            failure = $"weaponOptions member type '{collection.GetType().Name}' is not an IList or Array";
+            return false;
         }
 
-        private static bool SetDisabledRecursive(object target, bool disabled, int depth, out bool foundDisableMember)
+        private static bool TryGetWeaponOptionsMember(
+            object target,
+            out FieldInfo field,
+            out PropertyInfo property,
+            out object value)
         {
-            foundDisableMember = false;
+            field = null;
+            property = null;
+            value = null;
 
-            if (IsNull(target) || depth > 2)
-                return false;
-
-            if (SetBool(target, disabled, ref foundDisableMember))
-                return true;
-
-            if (foundDisableMember)
-                return false;
-
-            foreach (string nestedName in NestedObjectMemberNames)
+            foreach (string memberName in WeaponOptionsMemberNames)
             {
-                if (TryGet(target, nestedName, out object nested) && !IsNull(nested) && !ReferenceEquals(nested, target))
+                for (Type type = target.GetType(); type != null && type != typeof(object); type = type.BaseType)
                 {
-                    bool childFound = false;
-
-                    if (SetDisabledRecursive(nested, disabled, depth + 1, out childFound))
+                    field = type.GetField(memberName, Flags);
+                    if (field != null)
                     {
-                        foundDisableMember = true;
+                        value = field.GetValue(target);
                         return true;
                     }
 
-                    if (childFound)
-                        foundDisableMember = true;
-                }
-            }
-
-            return false;
-        }
-
-        private static bool SetBool(object target, bool value, ref bool foundDisableMember)
-        {
-            foreach (string name in DisabledMemberNames)
-            {
-                if (TryGet(target, name, out object currentValue))
-                {
-                    foundDisableMember = true;
-
-                    if (ConvertToBool(currentValue) != value && TrySet(target, name, value))
+                    property = type.GetProperty(memberName, Flags);
+                    if (property != null && property.CanRead)
+                    {
+                        value = property.GetValue(target);
                         return true;
+                    }
                 }
             }
 
             return false;
         }
 
-        private static bool ConvertToBool(object value)
+        private static bool TrySetWeaponOptionsMember(
+            object target,
+            FieldInfo field,
+            PropertyInfo property,
+            object newValue,
+            out string failure)
         {
-            if (value is bool b)
-                return b;
+            failure = null;
 
-            if (value is string s)
-                return s == "1" || (bool.TryParse(s, out bool parsed) && parsed);
+            try
+            {
+                if (field != null)
+                {
+                    field.SetValue(target, newValue);
+                    return true;
+                }
 
-            return false;
+                if (property != null && property.CanWrite)
+                {
+                    property.SetValue(target, newValue);
+                    return true;
+                }
+
+                failure = "weaponOptions member is read-only";
+                return false;
+            }
+            catch (Exception ex)
+            {
+                failure = ex.Message;
+                return false;
+            }
         }
 
-        public static bool TryGet(object target, string memberName, out object value)
+        private static bool TryGet(object target, string memberName, out object value)
         {
             value = null;
-
             if (IsNull(target))
                 return false;
 
@@ -1737,42 +1533,6 @@ namespace BalanceAndVarietyRework
             return false;
         }
 
-        public static bool TrySet(object target, string memberName, object value)
-        {
-            if (IsNull(target))
-                return false;
-
-            for (Type type = target.GetType(); type != null && type != typeof(object); type = type.BaseType)
-            {
-                FieldInfo field = type.GetField(memberName, Flags);
-                if (field != null)
-                {
-                    field.SetValue(target, ConvertToType(value, field.FieldType));
-                    return true;
-                }
-
-                PropertyInfo property = type.GetProperty(memberName, Flags);
-                if (property != null && property.CanWrite)
-                {
-                    property.SetValue(target, ConvertToType(value, property.PropertyType));
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
-        private static object ConvertToType(object value, Type targetType)
-        {
-            if (value == null)
-                return targetType.IsValueType ? Activator.CreateInstance(targetType) : null;
-
-            if (targetType.IsInstanceOfType(value))
-                return value;
-
-            return Convert.ChangeType(value, Nullable.GetUnderlyingType(targetType) ?? targetType, CultureInfo.InvariantCulture);
-        }
-
         private static void AddIdentifier(List<string> list, string identifier)
         {
             if (string.IsNullOrEmpty(identifier))
@@ -1787,16 +1547,266 @@ namespace BalanceAndVarietyRework
 
 
     // ========================================================================
-    // Harmony hook for blueprint weapon toggles.
+    // Blueprint weapon removal system.
+    // Runs when the MainMenu scene is loaded and scans all loaded memory,
+    // including prefab assets. It removes disabled blueprint options from
+    // HardpointSet.weaponOptions instead of setting a disabled bool.
+    //
+    // This system is event-driven. It does not poll.
     // ========================================================================
-    [HarmonyPatch(typeof(WeaponManager), "Awake")]
-    public static class BlueprintWeaponDisablePatch
+    // ========================================================================
+    // Blueprint weapon removal system.
+    // Runs when any scene is loaded and scans all loaded memory, including
+    // prefab assets. It removes disabled blueprint options from
+    // HardpointSet.weaponOptions instead of setting a disabled bool.
+    //
+    // The sweep runs on MainMenu AND on the first non-MainMenu scene load.
+    // This is critical because Blueprinter loads AFTER BVR in the plugin
+    // order, so the MainMenu sweep may fire before Blueprinter has applied
+    // its patches. The GameWorld scene sweep catches this case.
+    //
+    // This system is event-driven. It does not poll.
+    // ========================================================================
+    internal static class BlueprintWeaponRemovalSystem
     {
-        [HarmonyPostfix]
-        [HarmonyPriority(Priority.Last)]
-        public static void Postfix(WeaponManager __instance)
+        private static bool initialized;
+        private static bool sweepSucceeded;
+        private static List<BlueprintWeaponRule> rules = new List<BlueprintWeaponRule>();
+        private static readonly HashSet<string> removedLogKeys = new HashSet<string>();
+        private static readonly HashSet<string> diagnosticLogKeys = new HashSet<string>();
+
+        public static List<BlueprintWeaponRule> Rules => rules;
+        public static HashSet<string> DiagnosticLogKeys => diagnosticLogKeys;
+
+        public static bool IsWeaponMountDisabled(WeaponManager weaponManager, object weaponMount)
         {
-            BlueprintWeaponToggleSystem.NotifyWeaponManagerAwake(__instance);
+            if (weaponManager == null || weaponMount == null)
+                return false;
+
+            string rootName = ObjectNameUtility.GetCleanRootName(weaponManager.transform.root?.gameObject ?? weaponManager.gameObject);
+            if (string.IsNullOrEmpty(rootName))
+                return false;
+
+            List<string> identifiers = BlueprintRemovalReflection.GetExactIdentifiers(weaponMount);
+
+            foreach (BlueprintWeaponRule rule in rules)
+            {
+                if (rule.Enabled)
+                    continue;
+                if (!rule.MatchesAircraft(rootName))
+                    continue;
+
+                if (rule.ExactBlueprintKeys != null && rule.ExactBlueprintKeys.Any(key => identifiers.Any(id => string.Equals(id, key, StringComparison.Ordinal))))
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        public static void Initialize(Plugin owner)
+        {
+            if (initialized)
+                return;
+
+            if (owner == null)
+            {
+                Log.Error("BlueprintWeaponRemovalSystem.Initialize was called with a null plugin instance.");
+                return;
+            }
+
+            if (!RuntimeSettings.Captured)
+            {
+                Log.Error("BlueprintWeaponRemovalSystem.Initialize was called before RuntimeSettings.Capture. Blueprint removal will not run.");
+                return;
+            }
+
+            rules.Clear();
+            foreach (BlueprintWeaponDefinition definition in BlueprintWeaponRegistry.Definitions)
+            {
+                if (definition == null)
+                {
+                    Log.Error("BlueprintWeaponRegistry contains a null definition. This definition will be skipped.");
+                    continue;
+                }
+                if (string.IsNullOrEmpty(definition.ExactAircraftRootName))
+                {
+                    Log.Error($"Blueprint definition [{definition.Section}] {definition.Key} is missing ExactAircraftRootName. This definition will be skipped.");
+                    continue;
+                }
+                if (definition.ExactBlueprintKeys == null || definition.ExactBlueprintKeys.Length == 0)
+                {
+                    Log.Error($"Blueprint definition [{definition.Section}] {definition.Key} is missing ExactBlueprintKeys. This definition will be skipped.");
+                    continue;
+                }
+
+                rules.Add(new BlueprintWeaponRule
+                {
+                    ExactRootName = definition.ExactAircraftRootName,
+                    DisplayName = definition.Key,
+                    Enabled = definition.CachedEnabled,
+                    ExactBlueprintKeys = definition.ExactBlueprintKeys,
+                    HardpointSets = definition.HardpointSets
+                });
+            }
+
+            initialized = true;
+            SceneManager.sceneLoaded += OnSceneLoaded;
+
+            Scene activeScene = SceneManager.GetActiveScene();
+            if (activeScene.IsValid())
+                ApplyAll($"Active scene '{activeScene.name}' at initialization");
+
+            Log.Info("Blueprint weapon removal system initialized using startup-cached config values. Application is event-driven and does not poll.");
+        }
+
+        public static void Shutdown()
+        {
+            if (!initialized)
+                return;
+            SceneManager.sceneLoaded -= OnSceneLoaded;
+            initialized = false;
+        }
+
+        private static void OnSceneLoaded(Scene scene, LoadSceneMode mode)
+        {
+            if (!initialized || !scene.IsValid())
+                return;
+
+            // Always run on MainMenu (original behavior).
+            // Also run on the first non-MainMenu scene if the sweep has not
+            // yet succeeded. This is critical because Blueprinter loads AFTER
+            // BVR in the plugin order. The MainMenu sweep fires before
+            // Blueprinter applies its patches to the prefab assets. By the
+            // time the GameWorld scene loads, Blueprinter has finished and
+            // the prefab assets contain the blueprint weapon options.
+            if (scene.name == "MainMenu" || !sweepSucceeded)
+            {
+                ApplyAll($"Scene '{scene.name}' loaded");
+            }
+        }
+
+        private static void ApplyAll(string reason)
+        {
+            if (!initialized)
+                return;
+
+            try
+            {
+                int found = 0;
+                int totalRemoved = 0;
+
+                foreach (WeaponManager weaponManager in Resources.FindObjectsOfTypeAll<WeaponManager>())
+                {
+                    if (BlueprintRemovalReflection.IsNull(weaponManager))
+                        continue;
+                    found++;
+                    totalRemoved += Apply(weaponManager);
+                }
+
+                if (found > 0 && totalRemoved > 0)
+                {
+                    sweepSucceeded = true;
+                }
+
+                if (found == 0)
+                {
+                    MissingMemberLog.ErrorOnce(
+                        "BlueprintWeaponRemoval.NoWeaponManagers",
+                        $"[Blueprints] No WeaponManager instances were found during blueprint removal sweep. Reason='{reason}'. Loaded prefab assets and scene objects were both included.");
+                }
+                else
+                {
+                    string logKey = $"BlueprintWeaponRemoval.SweepComplete|{reason}";
+                    if (diagnosticLogKeys.Add(logKey))
+                    {
+                        Log.Info($"[Blueprints] Completed blueprint removal sweep. WeaponManagers scanned={found}, options removed={totalRemoved}. Reason='{reason}'.");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Exception($"Blueprint weapon removal ({reason})", ex);
+            }
+        }
+
+        private static int Apply(WeaponManager weaponManager)
+        {
+            if (BlueprintRemovalReflection.IsNull(weaponManager) || weaponManager.transform == null)
+                return 0;
+
+            string rootName = ObjectNameUtility.GetCleanRootName(weaponManager.transform.root?.gameObject ?? weaponManager.gameObject);
+            if (string.IsNullOrEmpty(rootName))
+                return 0;
+
+            int totalRemoved = 0;
+
+            foreach (BlueprintWeaponRule rule in rules)
+            {
+                if (!rule.MatchesAircraft(rootName))
+                    continue;
+                if (rule.Enabled)
+                    continue;
+
+                if (weaponManager.hardpointSets == null)
+                {
+                    MissingMemberLog.ErrorOnce(
+                        $"BlueprintWeaponRemoval.HardpointArrayNull|{rootName}",
+                        $"[Blueprints] WeaponManager on '{rootName}' has null hardpointSets.");
+                    continue;
+                }
+
+                foreach (int hardpointSet in rule.HardpointSets)
+                {
+                    string removalKey = $"{rootName}|{rule.DisplayName}|{hardpointSet}";
+
+                    if (hardpointSet < 0 || hardpointSet >= weaponManager.hardpointSets.Length)
+                    {
+                        MissingMemberLog.ErrorOnce(
+                            $"BlueprintWeaponRemoval.HardpointOutOfRange|{removalKey}",
+                            $"[Blueprints] Hardpoint set {hardpointSet} for '{rule.DisplayName}' on '{rootName}' is out of range. Count={weaponManager.hardpointSets.Length}.");
+                        continue;
+                    }
+
+                    object hardpoint = weaponManager.hardpointSets[hardpointSet];
+                    if (BlueprintRemovalReflection.IsNull(hardpoint))
+                    {
+                        MissingMemberLog.ErrorOnce(
+                            $"BlueprintWeaponRemoval.HardpointNull|{removalKey}",
+                            $"[Blueprints] Hardpoint set {hardpointSet} on '{rootName}' is null.");
+                        continue;
+                    }
+
+                    int removedCount;
+                    string failure;
+                    if (!BlueprintRemovalReflection.TryRemoveWeaponOptions(hardpoint, rule.MatchesWeaponOption, out removedCount, out failure))
+                    {
+                        MissingMemberLog.ErrorOnce(
+                            $"BlueprintWeaponRemoval.WeaponOptionsFailure|{removalKey}|{failure}",
+                            $"[Blueprints] Could not remove '{rule.DisplayName}' from hardpoint set {hardpointSet} on '{rootName}'. Failure: {failure}.");
+                        continue;
+                    }
+
+                    if (removedCount > 0)
+                    {
+                        totalRemoved += removedCount;
+                        removedLogKeys.Add(removalKey);
+                        string logKey = $"BlueprintWeaponRemoval.Removed|{removalKey}";
+                        if (diagnosticLogKeys.Add(logKey))
+                        {
+                            Log.Info($"[Blueprints] Removed {removedCount} '{rule.DisplayName}' option(s) from {rootName} hardpoint set {hardpointSet}.");
+                        }
+                    }
+                    else if (!removedLogKeys.Contains(removalKey))
+                    {
+                        MissingMemberLog.ErrorOnce(
+                            $"BlueprintWeaponRemoval.WeaponMissing|{removalKey}",
+                            $"[Blueprints] '{rule.DisplayName}' was not found on '{rootName}' hardpoint set {hardpointSet}. Verify ExactAircraftRootName, ExactBlueprintKeys, and hardpoint set.");
+                    }
+                }
+            }
+
+            return totalRemoved;
         }
     }
 
@@ -1805,13 +1815,13 @@ namespace BalanceAndVarietyRework
     // ========================================================================
     // IR missile buffs: flare count and flare rejection.
     // ========================================================================
-    [HarmonyPatch(typeof(WeaponManager), "Awake")]
+    [HarmonyPatch(typeof(WeaponManager), "SpawnWeapons")]
     public static class StatsPatch
     {
         private static bool flareSweepApplied;
         private static bool seekerSweepApplied;
 
-        public static void Prefix()
+        public static void Postfix(WeaponManager __instance)
         {
             if (!RuntimeSettings.Captured)
             {
@@ -1873,7 +1883,6 @@ namespace BalanceAndVarietyRework
 
                 int oldMax = maxAmmoField.GetValue<int>();
                 int oldAmmo = ammoField.GetValue<int>();
-
                 int newMax = Mathf.RoundToInt(oldMax * RuntimeSettings.FlareCountMultiplier);
                 int newAmmo = Mathf.RoundToInt(oldAmmo * RuntimeSettings.FlareCountMultiplier);
 
@@ -1887,7 +1896,6 @@ namespace BalanceAndVarietyRework
             if (found > 0)
             {
                 flareSweepApplied = true;
-
                 if (modified > 0)
                     Log.Info($"[IR Buff] Adjusted flare ammo on {modified} FlareEjector(s). Multiplier={RuntimeSettings.FlareCountMultiplier}.");
                 else
@@ -1938,7 +1946,6 @@ namespace BalanceAndVarietyRework
             if (found > 0)
             {
                 seekerSweepApplied = true;
-
                 if (modified > 0)
                     Log.Info($"[IR Buff] Adjusted flare rejection on {modified} IRSeeker(s). Multiplier={RuntimeSettings.FlareRejectionMultiplier}.");
                 else
@@ -1961,13 +1968,13 @@ namespace BalanceAndVarietyRework
     // to those that contain a Missile component. This avoids assuming a fixed
     // AAM1/Missile child path.
     // ========================================================================
-    [HarmonyPatch(typeof(WeaponManager), "Awake")]
+    [HarmonyPatch(typeof(WeaponManager), "SpawnWeapons")]
     public static class MMRS3MaxTurnRatePatch
     {
         private const string AAM1Name = "AAM1";
         private static bool applied;
 
-        public static void Prefix()
+        public static void Postfix(WeaponManager __instance)
         {
             if (!RuntimeSettings.Captured)
             {
@@ -2006,6 +2013,7 @@ namespace BalanceAndVarietyRework
                     continue;
 
                 aam1Objects++;
+
                 Missile[] missiles = gameObject.GetComponentsInChildren<Missile>(true);
                 if (missiles == null || missiles.Length == 0)
                     continue;
@@ -2015,6 +2023,7 @@ namespace BalanceAndVarietyRework
                     rootObject = gameObject.transform.root.gameObject;
 
                 bool isPrefabAsset = ObjectNameUtility.IsPrefabAsset(rootObject);
+
                 foreach (Missile missile in missiles)
                 {
                     if (missile == null || missile.gameObject == null)
@@ -2028,14 +2037,12 @@ namespace BalanceAndVarietyRework
                         if (isPrefabAsset)
                         {
                             prefabMembers++;
-                            if (wasChanged)
-                                prefabChanged++;
+                            if (wasChanged) prefabChanged++;
                         }
                         else
                         {
                             instanceMembers++;
-                            if (wasChanged)
-                                instanceChanged++;
+                            if (wasChanged) instanceChanged++;
                         }
                     }
                 }
@@ -2057,19 +2064,18 @@ namespace BalanceAndVarietyRework
                     rootObject = missile.transform.root.gameObject;
 
                 bool isPrefabAsset = ObjectNameUtility.IsPrefabAsset(rootObject);
+
                 if (TrySetMaxTurnRate(missile, out bool wasChanged))
                 {
                     if (isPrefabAsset)
                     {
                         prefabMembers++;
-                        if (wasChanged)
-                            prefabChanged++;
+                        if (wasChanged) prefabChanged++;
                     }
                     else
                     {
                         instanceMembers++;
-                        if (wasChanged)
-                            instanceChanged++;
+                        if (wasChanged) instanceChanged++;
                     }
                 }
             }
@@ -2111,6 +2117,7 @@ namespace BalanceAndVarietyRework
             changed = false;
 
             Traverse traverse = Traverse.Create(missile);
+
             Traverse field = traverse.Field("maxTurnRate");
             if (field.FieldExists())
             {
@@ -2120,7 +2127,6 @@ namespace BalanceAndVarietyRework
                     field.SetValue(RuntimeSettings.MMRS3MaxTurnRate);
                     changed = true;
                 }
-
                 return true;
             }
 
@@ -2133,14 +2139,12 @@ namespace BalanceAndVarietyRework
                     property.SetValue(RuntimeSettings.MMRS3MaxTurnRate);
                     changed = true;
                 }
-
                 return true;
             }
 
             MissingMemberLog.ErrorOnce(
                 "Missile.maxTurnRate.AAM1",
                 $"[MMR-S3 Max Turn Rate] Missile component on '{ObjectNameUtility.GetHierarchyPath(missile.gameObject)}' is missing field or property 'maxTurnRate'.");
-
             return false;
         }
     }
@@ -2151,13 +2155,13 @@ namespace BalanceAndVarietyRework
     // SARH lock persistence.
     // Uses shared SarhMissileMatcher logic.
     // ========================================================================
-    [HarmonyPatch(typeof(WeaponManager), "Awake")]
+    [HarmonyPatch(typeof(WeaponManager), "SpawnWeapons")]
     public static class SARHLockPersistencePatch
     {
         private static bool appliedR9;
         private static bool appliedRAM45;
 
-        public static void Prefix()
+        public static void Postfix(WeaponManager __instance)
         {
             if (!RuntimeSettings.Captured)
             {
@@ -2239,7 +2243,6 @@ namespace BalanceAndVarietyRework
             MissingMemberLog.WarnOnce(
                 $"SARHPersistence.{label}.Waiting",
                 $"[SARH Persistence] No {label} seekers under '{rootName}' found yet. Will retry when another WeaponManager awakens.");
-
             return false;
         }
     }
@@ -2253,7 +2256,6 @@ namespace BalanceAndVarietyRework
     public class SARHRelockController : MonoBehaviour
     {
         private SARHSeeker seeker;
-
         private Traverse seekerTraverse;
         private Traverse targetTransformField;
         private Traverse targetUnitField;
@@ -2262,14 +2264,11 @@ namespace BalanceAndVarietyRework
         private Traverse jamAccumulationField;
         private Traverse jamToleranceField;
         private Traverse missileField;
-
         private Missile cachedMissile;
-
         private float relockDelay;
         private int maxAttempts;
         private int attemptsUsed;
         private float remainingDelay;
-
         private bool waitingForRelock;
         private bool initialized;
         private bool initializationFailed;
@@ -2294,6 +2293,7 @@ namespace BalanceAndVarietyRework
             cachedMissile = null;
 
             seekerTraverse = Traverse.Create(seeker);
+
             InitializeFieldReferences();
             ValidateFieldReferences();
         }
@@ -2401,7 +2401,6 @@ namespace BalanceAndVarietyRework
         private void UpdateRelock()
         {
             Missile missile = GetMissile();
-
             if (missile != null && missile.seekerMode == Missile.SeekerMode.activeLock)
             {
                 attemptsUsed = 0;
@@ -2427,13 +2426,12 @@ namespace BalanceAndVarietyRework
                     waitingForRelock = true;
                     remainingDelay = relockDelay;
                 }
-
                 return;
             }
 
             DecayJam(Time.deltaTime);
-            remainingDelay -= Time.deltaTime;
 
+            remainingDelay -= Time.deltaTime;
             if (remainingDelay <= 0f)
                 TryRelock();
         }
@@ -2461,14 +2459,12 @@ namespace BalanceAndVarietyRework
                 MissingMemberLog.WarnOnce(
                     "SARHRelock.NoRandomPart",
                     "[SARH Relock] Target unit exists but GetRandomPart() returned null. Relock attempt skipped.");
-
                 return;
             }
 
             targetTransformField?.SetValue(newTargetTransform);
             timeWithoutTrackField?.SetValue(0f);
             lastTrackingCheckField?.SetValue(0f);
-
             waitingForRelock = false;
         }
 
@@ -2533,7 +2529,6 @@ namespace BalanceAndVarietyRework
                 {
                     if (!RuntimeSettings.EnableR9SARHRelock)
                         return;
-
                     delay = RuntimeSettings.R9SARHRelockDelay;
                     attempts = RuntimeSettings.R9SARHRelockAttempts;
                 }
@@ -2541,7 +2536,6 @@ namespace BalanceAndVarietyRework
                 {
                     if (!RuntimeSettings.EnableRAM45SARHRelock)
                         return;
-
                     delay = RuntimeSettings.RAM45SARHRelockDelay;
                     attempts = RuntimeSettings.RAM45SARHRelockAttempts;
                 }
@@ -2564,7 +2558,7 @@ namespace BalanceAndVarietyRework
     // ========================================================================
     // Cruise missile RCS patch.
     // ========================================================================
-    [HarmonyPatch(typeof(WeaponManager), "Awake")]
+    [HarmonyPatch(typeof(WeaponManager), "SpawnWeapons")]
     public static class CruiseMissileRCSPatch
     {
         private sealed class RcsTarget
@@ -2585,7 +2579,7 @@ namespace BalanceAndVarietyRework
 
         private static bool allApplied;
 
-        public static void Prefix()
+        public static void Postfix(WeaponManager __instance)
         {
             if (!RuntimeSettings.Captured)
             {
@@ -2604,7 +2598,6 @@ namespace BalanceAndVarietyRework
                         continue;
 
                     int modified = Apply(target.Name, target.Value());
-
                     if (modified > 0)
                     {
                         target.Applied = true;
@@ -2671,16 +2664,15 @@ namespace BalanceAndVarietyRework
     // ARH seeker loft factor patch.
     // Applies configured loftAmount to Scythe (AAM2) and Scimitar (AAM4).
     // ========================================================================
-    [HarmonyPatch(typeof(WeaponManager), "Awake")]
+    [HarmonyPatch(typeof(WeaponManager), "SpawnWeapons")]
     public static class ARHSeekerLoftPatch
     {
         private const string ScytheRootName = "AAM2";
         private const string ScimitarRootName = "AAM4";
-
         private static bool appliedScythe;
         private static bool appliedScimitar;
 
-        public static void Prefix()
+        public static void Postfix(WeaponManager __instance)
         {
             if (!RuntimeSettings.Captured)
             {
@@ -2777,175 +2769,35 @@ namespace BalanceAndVarietyRework
     // Targets the gun object inside the Chicane cockpit turret:
     //   AttackHelo1/cockpit_R/cockpit_F/turretMount/turret/gun
     // ========================================================================
-    [HarmonyPatch(typeof(WeaponManager), "Awake")]
+    [HarmonyPatch(typeof(WeaponManager), "SpawnWeapons")]
     public static class ProxyGunPatch
     {
-    private const string AttackHeloRoot = "AttackHelo1";
-    private const string GunChildPath = "cockpit_R/cockpit_F/turretMount/turret/gun";
-    private static bool applied;
-
-    public static void Prefix()
-    {
-    if (!RuntimeSettings.Captured)
-    {
-    Log.Error("Chicane proxy gun patch ran before RuntimeSettings.Capture. This patch will be skipped.");
-    return;
-    }
-
-    if (!RuntimeSettings.EnableChicaneProxyGun || applied)
-    return;
-
-    try
-    {
-    applied = TryApplyProxyGun();
-    }
-    catch (Exception ex)
-    {
-    Log.Exception("Chicane proxy gun patch", ex);
-    }
-    }
-
-    private static bool TryApplyProxyGun()
-    {
-    bool foundAnyAircraft = false;
-    bool fixedAny = false;
-
-    foreach (WeaponManager weaponManager in Resources.FindObjectsOfTypeAll<WeaponManager>())
-    {
-    if (weaponManager?.transform?.root == null)
-    continue;
-
-    string rootName = ObjectNameUtility.RemoveCloneSuffix(weaponManager.transform.root.name);
-    if (!rootName.Contains(AttackHeloRoot))
-    continue;
-
-    foundAnyAircraft = true;
-
-    Transform gunTransform = weaponManager.transform.root.Find(GunChildPath);
-    if (gunTransform == null)
-    {
-    MissingMemberLog.ErrorOnce(
-    $"ProxyGun.PathMissing|{rootName}",
-    $"[Proxy Gun] '{rootName}' does not contain gun path '{GunChildPath}'. Expected '{AttackHeloRoot}/{GunChildPath}'.");
-    continue;
-    }
-
-    if (TrySetProximityTimer(gunTransform.gameObject))
-    fixedAny = true;
-    }
-
-    if (!foundAnyAircraft)
-    {
-    MissingMemberLog.WarnOnce(
-    "ProxyGun.Waiting",
-    $"[Proxy Gun] No {AttackHeloRoot} WeaponManager found yet. Will retry when another WeaponManager awakens.");
-    return false;
-    }
-
-    return fixedAny;
-    }
-
-    private static bool TrySetProximityTimer(GameObject gunObject)
-    {
-    if (gunObject == null)
-    return false;
-
-    Component gunComponent = GetGunComponent(gunObject);
-    if (gunComponent == null)
-    {
-    MissingMemberLog.ErrorOnce(
-    $"ProxyGun.ComponentMissing|{ObjectNameUtility.GetHierarchyPath(gunObject)}",
-    $"[Proxy Gun] '{ObjectNameUtility.GetHierarchyPath(gunObject)}' has no component named 'Gun'.");
-    return false;
-    }
-
-    Traverse gunTraverse = Traverse.Create(gunComponent);
-
-    Traverse field = gunTraverse.Field("proximityTimer");
-    if (field.FieldExists())
-    {
-    bool currentValue = field.GetValue<bool>();
-    if (!currentValue)
-    {
-    field.SetValue(true);
-    Log.Info($"[Proxy Gun] Set Gun.proximityTimer=true on '{ObjectNameUtility.GetHierarchyPath(gunObject)}'.");
-    }
-
-    return true;
-    }
-
-    Traverse property = gunTraverse.Property("proximityTimer");
-    if (property.PropertyExists())
-    {
-    bool currentValue = property.GetValue<bool>();
-    if (!currentValue)
-    {
-    property.SetValue(true);
-    Log.Info($"[Proxy Gun] Set Gun.proximityTimer=true on '{ObjectNameUtility.GetHierarchyPath(gunObject)}'.");
-    }
-
-    return true;
-    }
-
-    MissingMemberLog.ErrorOnce(
-    $"ProxyGun.proximityTimer|{ObjectNameUtility.GetHierarchyPath(gunObject)}",
-    $"[Proxy Gun] The Gun component on '{ObjectNameUtility.GetHierarchyPath(gunObject)}' is missing field or property 'proximityTimer'.");
-    return false;
-    }
-
-    private static Component GetGunComponent(GameObject gunObject)
-    {
-    if (gunObject == null)
-    return null;
-
-    foreach (Component component in gunObject.GetComponents<Component>())
-    {
-    if (component == null)
-    continue;
-
-    if (component.GetType().Name == "Gun")
-    return component;
-    }
-
-    return null;
-    }
-    }
-
-
-
-    // ========================================================================
-    // SAH-46 Chicane bay pylon symmetry fix.
-    // ========================================================================
-    [HarmonyPatch(typeof(WeaponManager), "Awake")]
-    public static class ChicaneBayPylonSymmetryFixPatch
-    {
         private const string AttackHeloRoot = "AttackHelo1";
-        private const string PylonPath = "weaponBay_R/weaponDoorHinge_Ra/weaponDoorHinge_Rb/pylon_bay_R";
-
+        private const string GunChildPath = "cockpit_R/cockpit_F/turretMount/turret/gun";
         private static bool applied;
 
-        public static void Prefix()
+        public static void Postfix(WeaponManager __instance)
         {
             if (!RuntimeSettings.Captured)
             {
-                Log.Error("Chicane bay pylon symmetry patch ran before RuntimeSettings.Capture. This patch will be skipped.");
+                Log.Error("Chicane proxy gun patch ran before RuntimeSettings.Capture. This patch will be skipped.");
                 return;
             }
 
-            if (!RuntimeSettings.EnableChicaneBayPylonSymmetryFix || applied)
+            if (!RuntimeSettings.EnableChicaneProxyGun || applied)
                 return;
 
             try
             {
-                applied = TryApply();
+                applied = TryApplyProxyGun();
             }
             catch (Exception ex)
             {
-                Log.Exception("Chicane bay pylon symmetry patch", ex);
+                Log.Exception("Chicane proxy gun patch", ex);
             }
         }
 
-        private static bool TryApply()
+        private static bool TryApplyProxyGun()
         {
             bool foundAnyAircraft = false;
             bool fixedAny = false;
@@ -2961,35 +2813,356 @@ namespace BalanceAndVarietyRework
 
                 foundAnyAircraft = true;
 
-                Transform pylon = weaponManager.transform.root.Find(PylonPath);
-                if (pylon == null)
+                Transform gunTransform = weaponManager.transform.root.Find(GunChildPath);
+                if (gunTransform == null)
                 {
                     MissingMemberLog.ErrorOnce(
-                        $"ChicaneBayPylon.PathMissing|{rootName}",
-                        $"[Chicane Symmetry] '{rootName}' is missing pylon path '{PylonPath}'.");
+                        $"ProxyGun.PathMissing|{rootName}",
+                        $"[Proxy Gun] '{rootName}' does not contain gun path '{GunChildPath}'. Expected '{AttackHeloRoot}/{GunChildPath}'.");
                     continue;
                 }
 
-                Vector3 desiredPosition = new Vector3(0f, -0.35f, -0.1f);
-
-                if (pylon.localPosition != desiredPosition)
-                {
-                    pylon.localPosition = desiredPosition;
-                    Log.Info($"[Chicane Symmetry] Centered '{PylonPath}' on '{rootName}'.");
-                }
-
-                fixedAny = true;
+                if (TrySetProximityTimer(gunTransform.gameObject))
+                    fixedAny = true;
             }
 
             if (!foundAnyAircraft)
             {
                 MissingMemberLog.WarnOnce(
-                    "ChicaneBayPylon.Waiting",
-                    "[Chicane Symmetry] No AttackHelo1 WeaponManager found yet. Will retry when another WeaponManager awakens.");
+                    "ProxyGun.Waiting",
+                    $"[Proxy Gun] No {AttackHeloRoot} WeaponManager found yet. Will retry when another WeaponManager awakens.");
                 return false;
             }
 
             return fixedAny;
+        }
+
+        private static bool TrySetProximityTimer(GameObject gunObject)
+        {
+            if (gunObject == null)
+                return false;
+
+            Component gunComponent = GetGunComponent(gunObject);
+            if (gunComponent == null)
+            {
+                MissingMemberLog.ErrorOnce(
+                    $"ProxyGun.ComponentMissing|{ObjectNameUtility.GetHierarchyPath(gunObject)}",
+                    $"[Proxy Gun] '{ObjectNameUtility.GetHierarchyPath(gunObject)}' has no component named 'Gun'.");
+                return false;
+            }
+
+            Traverse gunTraverse = Traverse.Create(gunComponent);
+
+            Traverse field = gunTraverse.Field("proximityTimer");
+            if (field.FieldExists())
+            {
+                bool currentValue = field.GetValue<bool>();
+                if (!currentValue)
+                {
+                    field.SetValue(true);
+                    Log.Info($"[Proxy Gun] Set Gun.proximityTimer=true on '{ObjectNameUtility.GetHierarchyPath(gunObject)}'.");
+                }
+                return true;
+            }
+
+            Traverse property = gunTraverse.Property("proximityTimer");
+            if (property.PropertyExists())
+            {
+                bool currentValue = property.GetValue<bool>();
+                if (!currentValue)
+                {
+                    property.SetValue(true);
+                    Log.Info($"[Proxy Gun] Set Gun.proximityTimer=true on '{ObjectNameUtility.GetHierarchyPath(gunObject)}'.");
+                }
+                return true;
+            }
+
+            MissingMemberLog.ErrorOnce(
+                $"ProxyGun.proximityTimer|{ObjectNameUtility.GetHierarchyPath(gunObject)}",
+                $"[Proxy Gun] The Gun component on '{ObjectNameUtility.GetHierarchyPath(gunObject)}' is missing field or property 'proximityTimer'.");
+            return false;
+        }
+
+        private static Component GetGunComponent(GameObject gunObject)
+        {
+            if (gunObject == null)
+                return null;
+
+            foreach (Component component in gunObject.GetComponents<Component>())
+            {
+                if (component == null)
+                    continue;
+
+                if (component.GetType().Name == "Gun")
+                    return component;
+            }
+
+            return null;
+        }
+    }
+
+
+
+    // ========================================================================
+    // SAH-46 Chicane bay pylon symmetry system.
+    // This system uses event-driven scene sweeps and SpawnWeapons notifications.
+    // Path resolution is case-insensitive and tries known pylon name variants.
+    // ========================================================================
+    internal static class ChicaneBayPylonSymmetrySystem
+    {
+        private const string AttackHeloRoot = "AttackHelo1";
+        private static readonly Vector3 DesiredPylonLocalPosition = new Vector3(0f, -0.35f, -0.1f);
+        private static readonly string[] PylonPathCandidates =
+        {
+            "weaponBay_R/weaponDoorHinge_Ra/weaponDoorHinge_Rb/pylon_bay_R",
+            "weaponbay_R/weaponDoorHinge_Ra/weaponDoorHinge_Rb/pylon_bay_R",
+            "weaponBay_R/weaponDoorHinge_Ra/weaponDoorHinge_Rb/pyon_bay_R",
+            "weaponbay_R/weaponDoorHinge_Ra/weaponDoorHinge_Rb/pyon_bay_R"
+        };
+
+        private static bool initialized;
+        private static bool sweepSucceeded;
+        private static readonly HashSet<string> diagnosticLogKeys = new HashSet<string>();
+
+        public static void Initialize(Plugin owner)
+        {
+            if (initialized)
+                return;
+            if (owner == null)
+            {
+                Log.Error("ChicaneBayPylonSymmetrySystem.Initialize was called with a null plugin instance.");
+                return;
+            }
+            if (!RuntimeSettings.Captured)
+            {
+                Log.Error("ChicaneBayPylonSymmetrySystem.Initialize was called before RuntimeSettings.Capture. Chicane bay pylon symmetry will not run.");
+                return;
+            }
+
+            initialized = true;
+            if (!RuntimeSettings.EnableChicaneBayPylonSymmetryFix)
+            {
+                Log.Info("Chicane bay pylon symmetry system is disabled.");
+                return;
+            }
+
+            SceneManager.sceneLoaded += OnSceneLoaded;
+            Scene activeScene = SceneManager.GetActiveScene();
+            if (activeScene.IsValid())
+                ApplyAll($"Active scene '{activeScene.name}' at initialization");
+
+            Log.Info("Chicane bay pylon symmetry system initialized using startup-cached config values. Application is event-driven and does not poll.");
+        }
+
+        public static void Shutdown()
+        {
+            if (!initialized)
+                return;
+            SceneManager.sceneLoaded -= OnSceneLoaded;
+            initialized = false;
+        }
+
+        public static void NotifyWeaponManagerSpawned(WeaponManager weaponManager)
+        {
+            if (!initialized)
+            {
+                MissingMemberLog.ErrorOnce(
+                    "ChicaneBayPylon.SystemNotInitialized",
+                    "[Chicane Symmetry] NotifyWeaponManagerSpawned was called before ChicaneBayPylonSymmetrySystem.Initialize.");
+                return;
+            }
+            if (!RuntimeSettings.EnableChicaneBayPylonSymmetryFix)
+                return;
+
+            try
+            {
+                bool aircraftMatched;
+                bool pylonFound;
+                bool pylonAdjusted;
+                if (TryApply(weaponManager, out aircraftMatched, out pylonFound, out pylonAdjusted) && pylonFound)
+                    sweepSucceeded = true;
+            }
+            catch (Exception ex)
+            {
+                Log.Exception("Chicane bay pylon symmetry spawn notification", ex);
+            }
+        }
+
+        private static void OnSceneLoaded(Scene scene, LoadSceneMode mode)
+        {
+            if (!initialized || !scene.IsValid() || !RuntimeSettings.EnableChicaneBayPylonSymmetryFix)
+                return;
+            if (scene.name == "MainMenu" || !sweepSucceeded)
+                ApplyAll($"Scene '{scene.name}' loaded");
+        }
+
+        private static void ApplyAll(string reason)
+        {
+            if (!initialized || !RuntimeSettings.EnableChicaneBayPylonSymmetryFix)
+                return;
+
+            try
+            {
+                int weaponManagersScanned = 0;
+                int matchedAircraft = 0;
+                int pylonsFound = 0;
+                int pylonsAdjusted = 0;
+
+                foreach (WeaponManager weaponManager in Resources.FindObjectsOfTypeAll<WeaponManager>())
+                {
+                    if (weaponManager == null || weaponManager.transform == null)
+                        continue;
+                    weaponManagersScanned++;
+
+                    bool aircraftMatched;
+                    bool pylonFound;
+                    bool pylonAdjusted;
+                    if (!TryApply(weaponManager, out aircraftMatched, out pylonFound, out pylonAdjusted))
+                        continue;
+                    if (aircraftMatched)
+                        matchedAircraft++;
+                    if (pylonFound)
+                        pylonsFound++;
+                    if (pylonAdjusted)
+                        pylonsAdjusted++;
+                }
+
+                if (weaponManagersScanned == 0)
+                {
+                    MissingMemberLog.WarnOnce(
+                        "ChicaneBayPylon.NoWeaponManagersWaiting",
+                        $"[Chicane Symmetry] No WeaponManager instances were found during pylon symmetry sweep. Reason='{reason}'. Will retry on a later scene load.");
+                    return;
+                }
+                if (matchedAircraft == 0)
+                {
+                    MissingMemberLog.WarnOnce(
+                        "ChicaneBayPylon.AttackHeloWaiting",
+                        $"[Chicane Symmetry] No {AttackHeloRoot} WeaponManager was found during pylon symmetry sweep. Reason='{reason}'. Will retry on a later scene load.");
+                    return;
+                }
+                if (pylonsFound > 0)
+                {
+                    sweepSucceeded = true;
+                    string logKey = $"ChicaneBayPylon.Sweep|{reason}";
+                    if (diagnosticLogKeys.Add(logKey))
+                    {
+                        Log.Info(
+                            $"[Chicane Symmetry] Completed pylon symmetry sweep. " +
+                            $"WeaponManagers scanned={weaponManagersScanned}, matched aircraft={matchedAircraft}, " +
+                            $"pylon(s) found={pylonsFound}, adjusted={pylonsAdjusted}. Reason='{reason}'.");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Exception($"Chicane bay pylon symmetry ({reason})", ex);
+            }
+        }
+
+        private static bool TryApply(WeaponManager weaponManager, out bool aircraftMatched, out bool pylonFound, out bool pylonAdjusted)
+        {
+            aircraftMatched = false;
+            pylonFound = false;
+            pylonAdjusted = false;
+            if (weaponManager == null || weaponManager.transform == null)
+                return false;
+
+            Transform root = weaponManager.transform.root != null ? weaponManager.transform.root : weaponManager.transform;
+            string rootName = ObjectNameUtility.GetCleanRootName(root.gameObject);
+            if (string.IsNullOrEmpty(rootName) || rootName.IndexOf(AttackHeloRoot, StringComparison.OrdinalIgnoreCase) < 0)
+                return false;
+
+            aircraftMatched = true;
+            Transform pylon = FindPylon(root);
+            if (pylon == null)
+            {
+                MissingMemberLog.ErrorOnce(
+                    $"ChicaneBayPylon.PathMissing|{rootName}",
+                    $"[Chicane Symmetry] '{rootName}' is missing pylon path. Tried: {string.Join(" | ", PylonPathCandidates)}.");
+                return true;
+            }
+
+            pylonFound = true;
+            if (pylon.localPosition != DesiredPylonLocalPosition)
+            {
+                pylon.localPosition = DesiredPylonLocalPosition;
+                pylonAdjusted = true;
+                string logKey = $"ChicaneBayPylon.Centered|{rootName}";
+                if (diagnosticLogKeys.Add(logKey))
+                    Log.Info($"[Chicane Symmetry] Centered '{ObjectNameUtility.GetHierarchyPath(pylon.gameObject)}' on '{rootName}'.");
+            }
+            return true;
+        }
+
+        private static Transform FindPylon(Transform root)
+        {
+            foreach (string candidatePath in PylonPathCandidates)
+            {
+                Transform result = FindChildPathCaseInsensitive(root, candidatePath);
+                if (result != null)
+                    return result;
+            }
+            return null;
+        }
+
+        private static Transform FindChildPathCaseInsensitive(Transform root, string path)
+        {
+            if (root == null)
+                return null;
+            Transform current = root;
+            foreach (string segment in path.Split('/'))
+            {
+                if (current == null)
+                    return null;
+                current = FindChildByNameCaseInsensitive(current, segment);
+            }
+            return current;
+        }
+
+        private static Transform FindChildByNameCaseInsensitive(Transform parent, string name)
+        {
+            if (parent == null || string.IsNullOrEmpty(name))
+                return null;
+            for (int i = 0; i < parent.childCount; i++)
+            {
+                Transform child = parent.GetChild(i);
+                if (child == null)
+                    continue;
+                string cleanName = ObjectNameUtility.RemoveCloneSuffix(child.name);
+                if (string.Equals(cleanName, name, StringComparison.OrdinalIgnoreCase))
+                    return child;
+            }
+            return null;
+        }
+    }
+
+
+
+    // ========================================================================
+    // SAH-46 Chicane bay pylon symmetry Harmony hook.
+    // ========================================================================
+    [HarmonyPatch(typeof(WeaponManager), "SpawnWeapons")]
+    public static class ChicaneBayPylonSymmetryFixPatch
+    {
+        public static void Postfix(WeaponManager __instance)
+        {
+            if (!RuntimeSettings.Captured)
+            {
+                Log.Error("Chicane bay pylon symmetry patch ran before RuntimeSettings.Capture. This patch will be skipped.");
+                return;
+            }
+            if (!RuntimeSettings.EnableChicaneBayPylonSymmetryFix)
+                return;
+
+            try
+            {
+                ChicaneBayPylonSymmetrySystem.NotifyWeaponManagerSpawned(__instance);
+            }
+            catch (Exception ex)
+            {
+                Log.Exception("Chicane bay pylon symmetry patch", ex);
+            }
         }
     }
 
@@ -2998,12 +3171,12 @@ namespace BalanceAndVarietyRework
     // ========================================================================
     // EW-25 Medusa laser power draw patch.
     // ========================================================================
-    [HarmonyPatch(typeof(WeaponManager), "Awake")]
+    [HarmonyPatch(typeof(WeaponManager), "SpawnWeapons")]
     public static class MedusaLaserPatch
     {
         private static bool applied;
 
-        public static void Prefix()
+        public static void Postfix(WeaponManager __instance)
         {
             if (!RuntimeSettings.Captured)
             {
@@ -3111,6 +3284,7 @@ namespace BalanceAndVarietyRework
                     return;
 
                 string rootName = ObjectNameUtility.GetCleanRootName(__instance.gameObject);
+
                 if (rootName.IndexOf(SpaagNameContains, StringComparison.OrdinalIgnoreCase) >= 0)
                 {
                     ApplyToGun(__instance, rootName);
@@ -3125,6 +3299,7 @@ namespace BalanceAndVarietyRework
         private static void ApplyToGun(Gun gun, string rootName)
         {
             Traverse traverse = Traverse.Create(gun);
+
             Traverse capField = traverse.Field("magazineCapacity");
             Traverse magsField = traverse.Field("magazines");
 
@@ -3146,7 +3321,6 @@ namespace BalanceAndVarietyRework
 
             int currentCap = capField.GetValue<int>();
             int currentMags = magsField.GetValue<int>();
-
             bool changed = false;
 
             if (currentCap != RuntimeSettings.SpaagMagazineCapacity)
@@ -3257,6 +3431,7 @@ namespace BalanceAndVarietyRework
         private static void ApplyToGun(Gun gun, string rootName)
         {
             Traverse traverse = Traverse.Create(gun);
+
             Traverse capField = traverse.Field("magazineCapacity");
             Traverse magsField = traverse.Field("magazines");
 
@@ -3457,11 +3632,11 @@ namespace BalanceAndVarietyRework
         }
     }
 
+
+
     // ========================================================================
     // Arresting cable definitions and runtime injection system.
-    // This system polls after scene loads because carrier objects may not
-    // raise WeaponManager.Awake at a useful time and may spawn after the
-    // first scene pass.
+    // This system hooks Ship.Awake to inject cables as carriers spawn.
     // ========================================================================
     internal sealed class ArrestingCableInjection
     {
@@ -3496,10 +3671,9 @@ namespace BalanceAndVarietyRework
 
         private static Plugin plugin;
         private static bool initialized;
-        private static bool awakeApplyQueued;
-        private static Coroutine activePoll;
         private static GameObject cachedSourceCable;
         private static List<ArrestingCableCarrierDefinition> definitions = new List<ArrestingCableCarrierDefinition>();
+        private static HashSet<GameObject> pendingTargetRoots = new HashSet<GameObject>();
         private static readonly HashSet<string> diagnosticLogKeys = new HashSet<string>();
 
         public static void Initialize(Plugin owner)
@@ -3596,209 +3770,198 @@ namespace BalanceAndVarietyRework
                 return;
             }
 
-            SceneManager.sceneLoaded += OnSceneLoaded;
-            StartPoll(120f);
-
             Log.Info($"Arresting cable system initialized. Enabled feature(s): {definitions.Count}.");
         }
 
-        public static void NotifyWeaponManagerAwake()
+        public static void NotifyShipSpawned(Ship ship)
         {
-            if (!initialized || awakeApplyQueued || plugin == null || definitions.Count == 0)
+            if (!initialized || ship == null || ship.transform == null)
                 return;
 
-            awakeApplyQueued = true;
-            plugin.StartCoroutine(DelayedApply(new float[] { 0.5f, 2f, 5f, 10f }, () => awakeApplyQueued = false));
-        }
-
-        private static void OnSceneLoaded(Scene scene, LoadSceneMode mode)
-        {
-            if (!initialized || plugin == null || definitions.Count == 0)
+            GameObject root = ship.transform.root?.gameObject ?? ship.gameObject;
+            if (root == null)
                 return;
 
-            StartPoll(90f);
-        }
+            string cleanName = ObjectNameUtility.RemoveCloneSuffix(root.name);
 
-        private static void StartPoll(float duration)
-        {
-            if (plugin == null)
-                return;
-
-            if (activePoll != null)
-                plugin.StopCoroutine(activePoll);
-
-            activePoll = plugin.StartCoroutine(Poll(duration));
-        }
-
-        private static IEnumerator Poll(float duration)
-        {
-            yield return new WaitForSecondsRealtime(0.5f);
-
-            float endTime = Time.unscaledTime + Mathf.Max(1f, duration);
-            while (Time.unscaledTime < endTime)
+            if (cleanName.Equals(SourceRootName, StringComparison.OrdinalIgnoreCase))
             {
-                ApplyAll();
-                yield return new WaitForSecondsRealtime(2f);
+                TryCacheSourceCable(ship.transform);
             }
 
-            ApplyAll();
+            // Clean destroyed pending roots so old destroyed carriers do not keep
+            // the pending set alive indefinitely.
+            if (pendingTargetRoots.Count > 0)
+                pendingTargetRoots.RemoveWhere(pendingRoot => pendingRoot == null);
+
+            bool attemptedResourceSearch = false;
+
+            foreach (ArrestingCableCarrierDefinition definition in definitions)
+            {
+                if (!IsTargetRoot(root, definition))
+                    continue;
+
+                // If FleetCarrier1 has not spawned, try to use a loaded FleetCarrier1
+                // prefab asset or inactive scene object as the cable source.
+                if (cachedSourceCable == null && !attemptedResourceSearch)
+                {
+                    attemptedResourceSearch = true;
+                    TryCacheSourceCableFromLoadedResources();
+                }
+
+                if (cachedSourceCable != null)
+                {
+                    ApplyToRoot(definition, root, cachedSourceCable);
+                }
+                else
+                {
+                    pendingTargetRoots.Add(root);
+                }
+            }
         }
 
-        private static IEnumerator DelayedApply(float[] delays, Action callback = null)
+        private static bool TryCacheSourceCableFromLoadedResources()
         {
-            foreach (float delay in delays)
+            if (cachedSourceCable != null)
+                return true;
+
+            int fleetCarrierObjects = 0;
+            GameObject bestSourceRoot = null;
+            Transform bestSourceCable = null;
+
+            // Resources.FindObjectsOfTypeAll includes inactive scene objects and loaded
+            // prefab assets. This is intentionally event-driven; it is only called when
+            // a target carrier needs the source cable.
+            foreach (GameObject candidate in Resources.FindObjectsOfTypeAll<GameObject>())
             {
-                yield return new WaitForSecondsRealtime(delay);
-                ApplyAll();
+                if (candidate == null || candidate.transform == null)
+                    continue;
+
+                string candidateName = ObjectNameUtility.RemoveCloneSuffix(candidate.name);
+                if (!string.Equals(candidateName, SourceRootName, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                fleetCarrierObjects++;
+
+                Transform cable = FindChildPath(candidate.transform, SourceCablePath);
+                if (cable == null || cable.gameObject == null)
+                    continue;
+
+                // Prefer a prefab asset so the feature works even when no live
+                // FleetCarrier1 exists in the active mission scene.
+                if (ObjectNameUtility.IsPrefabAsset(candidate))
+                {
+                    bestSourceRoot = candidate;
+                    bestSourceCable = cable;
+                    break;
+                }
+
+                if (bestSourceCable == null)
+                {
+                    bestSourceRoot = candidate;
+                    bestSourceCable = cable;
+                }
             }
 
-            callback?.Invoke();
+            if (bestSourceCable == null)
+            {
+                if (fleetCarrierObjects == 0)
+                {
+                    MissingMemberLog.WarnOnce(
+                        "ArrestingCables.SourceResourceSearchWaiting",
+                        "[Arresting Cables] No loaded FleetCarrier1 object was found while searching for the arresting cable source. Will retry when another target carrier spawns.");
+                }
+                else
+                {
+                    MissingMemberLog.ErrorOnce(
+                        "ArrestingCables.SourceResourcePathMissing",
+                        $"[Arresting Cables] Found {fleetCarrierObjects} loaded FleetCarrier1 object(s), but none contained source cable path '{SourceCablePath}'.");
+                }
+
+                return false;
+            }
+
+            cachedSourceCable = bestSourceCable.gameObject;
+
+            if (diagnosticLogKeys.Add("ArrestingCables.SourceFoundInResources"))
+            {
+                Log.Info($"[Arresting Cables] Successfully cached source cable from loaded FleetCarrier1 object '{ObjectNameUtility.GetHierarchyPath(bestSourceRoot)}' (prefab asset={ObjectNameUtility.IsPrefabAsset(bestSourceRoot)}).");
+            }
+
+            ProcessPendingRoots();
+            return true;
         }
 
-        private static void ApplyAll()
+        private static void TryCacheSourceCable(Transform shipRoot)
         {
-            if (!RuntimeSettings.Captured || definitions.Count == 0)
+            if (cachedSourceCable != null)
                 return;
 
-            try
+            Transform cable = FindChildPath(shipRoot, SourceCablePath);
+            if (cable != null && cable.gameObject != null)
             {
-                GameObject sourceCable = EnsureSourceCable();
-                if (sourceCable == null)
-                    return;
+                cachedSourceCable = cable.gameObject;
+                if (diagnosticLogKeys.Add("ArrestingCables.SourceFound"))
+                {
+                    Log.Info("[Arresting Cables] Successfully cached source cable from FleetCarrier1 Awake.");
+                }
+
+                ProcessPendingRoots();
+            }
+            else
+            {
+                MissingMemberLog.ErrorOnce(
+                    "ArrestingCables.SourceMissingOnAwake",
+                    $"[Arresting Cables] FleetCarrier1 spawned, but source cable path '{SourceCablePath}' was not found in its hierarchy.");
+            }
+        }
+
+        private static void ProcessPendingRoots()
+        {
+            if (cachedSourceCable == null || pendingTargetRoots.Count == 0)
+                return;
+
+            List<GameObject> toRemove = new List<GameObject>();
+            foreach (GameObject pendingRoot in pendingTargetRoots)
+            {
+                if (pendingRoot == null)
+                {
+                    toRemove.Add(pendingRoot);
+                    continue;
+                }
 
                 foreach (ArrestingCableCarrierDefinition definition in definitions)
                 {
-                    try
+                    if (IsTargetRoot(pendingRoot, definition))
                     {
-                        ApplyDefinition(definition, sourceCable);
-                    }
-                    catch (Exception ex)
-                    {
-                        Log.Exception($"Arresting cable application for '{definition.Label}'", ex);
+                        ApplyToRoot(definition, pendingRoot, cachedSourceCable);
+                        toRemove.Add(pendingRoot);
+                        break;
                     }
                 }
             }
-            catch (Exception ex)
-            {
-                Log.Exception("Arresting cable system", ex);
-            }
+
+            foreach (GameObject pendingRoot in toRemove)
+                pendingTargetRoots.Remove(pendingRoot);
         }
 
-        private static void ApplyDefinition(ArrestingCableCarrierDefinition definition, GameObject sourceCable)
+        private static bool IsTargetRoot(GameObject root, ArrestingCableCarrierDefinition definition)
         {
-            if (definition == null || definition.Injections == null || definition.Injections.Length == 0)
+            if (root == null) return false;
+
+            string cleanName = ObjectNameUtility.RemoveCloneSuffix(root.name);
+            if (string.IsNullOrEmpty(cleanName)) return false;
+
+            if (cleanName.Equals(definition.RootName, StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            if (!string.IsNullOrEmpty(definition.FallbackRootContains) &&
+                cleanName.IndexOf(definition.FallbackRootContains, StringComparison.OrdinalIgnoreCase) >= 0)
             {
-                Log.Error("[Arresting Cables] Encountered an invalid arresting cable definition.");
-                return;
+                return IsPlausibleTargetRoot(root, definition);
             }
 
-            HashSet<GameObject> roots = FindTargetRoots(definition);
-            if (roots.Count == 0)
-            {
-                MissingMemberLog.WarnOnce(
-                    $"ArrestingCables.{definition.Label}.Waiting",
-                    $"[{definition.Label}] No scene root matching '{definition.RootName}' found yet. Will keep polling.");
-                return;
-            }
-
-            foreach (GameObject root in roots)
-            {
-                try
-                {
-                    ApplyToRoot(definition, root, sourceCable);
-                }
-                catch (Exception ex)
-                {
-                    Log.Exception($"Arresting cable injection on '{root?.name}'", ex);
-                }
-            }
-        }
-
-        private static GameObject EnsureSourceCable()
-        {
-            if (cachedSourceCable != null)
-                return cachedSourceCable;
-
-            cachedSourceCable = FindSourceCable();
-            if (cachedSourceCable == null)
-            {
-                MissingMemberLog.WarnOnce(
-                    "ArrestingCables.SourceWaiting",
-                    $"[Arresting Cables] No source arresting cable '{SourceRootName}/{SourceCablePath}' found yet. Will keep polling.");
-                return null;
-            }
-
-            if (diagnosticLogKeys.Add("ArrestingCables.SourceFound"))
-            {
-                Log.Info($"[Arresting Cables] Using source cable '{ObjectNameUtility.GetHierarchyPath(cachedSourceCable)}'.");
-            }
-
-            return cachedSourceCable;
-        }
-
-        private static GameObject FindSourceCable()
-        {
-            foreach (GameObject gameObject in Resources.FindObjectsOfTypeAll<GameObject>())
-            {
-                if (gameObject == null || gameObject.transform == null)
-                    continue;
-
-                string cleanName = ObjectNameUtility.RemoveCloneSuffix(gameObject.name);
-                if (string.IsNullOrEmpty(cleanName))
-                    continue;
-
-                bool exact = cleanName.Equals(SourceRootName, StringComparison.OrdinalIgnoreCase);
-                bool partial = cleanName.IndexOf(SourceRootName, StringComparison.OrdinalIgnoreCase) >= 0;
-                if (!exact && !partial)
-                    continue;
-
-                Transform cable = FindChildPath(gameObject.transform, SourceCablePath);
-                if (cable != null && cable.gameObject != null)
-                    return cable.gameObject;
-            }
-
-            return null;
-        }
-
-        private static HashSet<GameObject> FindTargetRoots(ArrestingCableCarrierDefinition definition)
-        {
-            List<GameObject> exactMatches = new List<GameObject>();
-            List<GameObject> fallbackMatches = new List<GameObject>();
-
-            foreach (GameObject gameObject in Resources.FindObjectsOfTypeAll<GameObject>())
-            {
-                if (gameObject == null || gameObject.transform == null)
-                    continue;
-
-                if (ObjectNameUtility.IsPrefabAsset(gameObject))
-                    continue;
-
-                string cleanName = ObjectNameUtility.RemoveCloneSuffix(gameObject.name);
-                if (string.IsNullOrEmpty(cleanName))
-                    continue;
-
-                if (cleanName.Equals(definition.RootName, StringComparison.OrdinalIgnoreCase))
-                {
-                    exactMatches.Add(gameObject);
-                }
-                else if (!string.IsNullOrEmpty(definition.FallbackRootContains) &&
-                         cleanName.IndexOf(definition.FallbackRootContains, StringComparison.OrdinalIgnoreCase) >= 0)
-                {
-                    fallbackMatches.Add(gameObject);
-                }
-            }
-
-            if (exactMatches.Count > 0)
-                return new HashSet<GameObject>(exactMatches);
-
-            HashSet<GameObject> plausibleRoots = new HashSet<GameObject>();
-            foreach (GameObject gameObject in fallbackMatches)
-            {
-                if (IsPlausibleTargetRoot(gameObject, definition))
-                    plausibleRoots.Add(gameObject);
-            }
-
-            return plausibleRoots;
+            return false;
         }
 
         private static bool IsPlausibleTargetRoot(GameObject gameObject, ArrestingCableCarrierDefinition definition)
@@ -3854,6 +4017,7 @@ namespace BalanceAndVarietyRework
                 string cableName = CableBaseName + injection.CableNumber;
                 bool wasExisting;
                 GameObject cable = EnsureCable(definition, sourceCable, parent, cableName, injection.LocalPosition, injection.CableNumber, out wasExisting);
+
                 if (cable == null)
                 {
                     allInjected = false;
@@ -3891,6 +4055,7 @@ namespace BalanceAndVarietyRework
 
             Transform existing = FindChildByName(parent, cableName);
             GameObject cable;
+
             if (existing != null)
             {
                 cable = existing.gameObject;
@@ -3935,6 +4100,7 @@ namespace BalanceAndVarietyRework
                 cable.AddComponent<ModifiedStatsFlag>();
 
             cable.SetActive(true);
+
             return cable;
         }
 
@@ -3952,6 +4118,7 @@ namespace BalanceAndVarietyRework
 
             string[] segments = path.Split('/');
             Transform current = root;
+
             foreach (string segment in segments)
             {
                 if (current == null)
@@ -4077,43 +4244,54 @@ namespace BalanceAndVarietyRework
         }
     }
 
+
+
     // ========================================================================
-    // Optional Harmony notify hook for arresting cables.
-    // This is not the primary application path. It only gives the system
-    // additional retry opportunities when weapon systems wake up.
+    // Harmony hook for arresting cables.
+    // Hooks Ship.Awake to catch carrier spawns without polling or scene sweeps.
     // ========================================================================
-    [HarmonyPatch(typeof(WeaponManager), "Awake")]
-    public static class ArrestingCableNotifyPatch
+    [HarmonyPatch(typeof(Ship), "Awake")]
+    public static class ShipAwakeArrestingCablePatch
     {
         [HarmonyPostfix]
         [HarmonyPriority(Priority.Last)]
-        public static void Postfix()
+        public static void Postfix(Ship __instance)
         {
-            ArrestingCableSystem.NotifyWeaponManagerAwake();
+            if (!RuntimeSettings.Captured)
+            {
+                Log.Error("Ship Awake arresting cable patch ran before RuntimeSettings.Capture. This patch will be skipped.");
+                return;
+            }
+
+            if (!RuntimeSettings.EnableAnnexArrestingCables && !RuntimeSettings.EnableCursorLFDArrestingCables)
+                return;
+
+            try
+            {
+                ArrestingCableSystem.NotifyShipSpawned(__instance);
+            }
+            catch (Exception ex)
+            {
+                Log.Exception("Ship Awake arresting cable patch", ex);
+            }
         }
     }
 
+
+
     // ========================================================================
     // Canopy glass visibility patch.
+    // Hooks Canopy.Awake to use the component as an anchor for a localized search.
+    // This avoids global scene sweeps while guaranteeing we catch the interior glass
+    // meshes (which are separate from the exterior damage-decal meshes).
     // Uses startup-cached config values only. Runtime config changes are ignored.
     // ========================================================================
-    [HarmonyPatch(typeof(WeaponManager), "Awake")]
-    public static class CanopyGlassPatch
+    [HarmonyPatch(typeof(Canopy), "Awake")]
+    public static class CanopyGlassAwakePatch
     {
         private static readonly HashSet<string> infoLogKeys = new HashSet<string>();
 
-        private sealed class ToggleState
-        {
-            public CanopyGlassDefinition Definition;
-            public HashSet<string> RootNameSet;
-            public HashSet<string> GlassNameSet;
-            public bool RootFound;
-            public int Found;
-            public int Disabled;
-            public HashSet<string> FoundNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        }
-
-        public static void Prefix()
+        public static void Postfix(Canopy __instance)
         {
             if (!RuntimeSettings.Captured)
             {
@@ -4123,7 +4301,7 @@ namespace BalanceAndVarietyRework
 
             try
             {
-                ApplyAll();
+                Apply(__instance);
             }
             catch (Exception ex)
             {
@@ -4131,137 +4309,298 @@ namespace BalanceAndVarietyRework
             }
         }
 
-        private static void ApplyAll()
+        private static void Apply(Canopy canopy)
         {
-            List<ToggleState> states = new List<ToggleState>();
+            if (canopy == null || canopy.transform == null)
+                return;
 
+            Transform rootTransform = canopy.transform.root;
+            if (rootTransform == null)
+                return;
+
+            GameObject rootObject = rootTransform.gameObject;
+            if (rootObject == null)
+                return;
+
+            // Avoid modifying prefab assets directly. Scene instances are the intended targets.
+            if (ObjectNameUtility.IsPrefabAsset(rootObject))
+                return;
+
+            string rootName = ObjectNameUtility.RemoveCloneSuffix(rootObject.name);
+            if (string.IsNullOrEmpty(rootName))
+                return;
+
+            CanopyGlassDefinition matchedDefinition = null;
             foreach (CanopyGlassDefinition definition in CanopyGlassRegistry.Definitions)
             {
-                if (definition == null || !definition.CachedDisabled)
+                if (definition == null)
+                {
+                    Log.Error("CanopyGlassRegistry contains a null definition while applying canopy glass visibility.");
+                    continue;
+                }
+
+                if (!definition.CachedDisabled)
                     continue;
 
-                if (definition.RootNames == null || definition.RootNames.Length == 0 ||
-                    definition.GlassNames == null || definition.GlassNames.Length == 0)
+                if (definition.RootNames == null || definition.RootNames.Length == 0)
                 {
                     MissingMemberLog.ErrorOnce(
                         $"CanopyGlass.{definition.Section}.InvalidDefinition",
-                        $"[Canopy Glass] Definition for '{definition.Section}' is missing RootNames or GlassNames.");
+                        $"[Canopy Glass] Definition for '{definition.Section}' is missing RootNames.");
                     continue;
                 }
 
-                states.Add(new ToggleState
+                if (definition.RootNames.Any(root => string.Equals(root, rootName, StringComparison.OrdinalIgnoreCase)))
                 {
-                    Definition = definition,
-                    RootNameSet = new HashSet<string>(definition.RootNames, StringComparer.OrdinalIgnoreCase),
-                    GlassNameSet = new HashSet<string>(definition.GlassNames, StringComparer.OrdinalIgnoreCase)
-                });
+                    matchedDefinition = definition;
+                    break;
+                }
             }
 
-            if (states.Count == 0)
+            if (matchedDefinition == null)
                 return;
 
-            foreach (GameObject gameObject in Resources.FindObjectsOfTypeAll<GameObject>())
-            {
-                if (gameObject == null || ObjectNameUtility.IsPrefabAsset(gameObject))
-                    continue;
-
-                string cleanName = ObjectNameUtility.RemoveCloneSuffix(gameObject.name);
-                if (string.IsNullOrEmpty(cleanName))
-                    continue;
-
-                foreach (ToggleState state in states)
-                {
-                    if (!state.RootFound && state.RootNameSet.Contains(cleanName))
-                        state.RootFound = true;
-
-                    if (!state.GlassNameSet.Contains(cleanName))
-                        continue;
-
-                    if (!IsUnderAnyRoot(gameObject, state.Definition.RootNames))
-                        continue;
-
-                    state.RootFound = true;
-                    state.Found++;
-                    state.FoundNames.Add(cleanName);
-
-                    if (gameObject.activeSelf)
-                    {
-                        gameObject.SetActive(false);
-                        state.Disabled++;
-                    }
-                }
-            }
-
-            foreach (ToggleState state in states)
-            {
-                try
-                {
-                    Report(state);
-                }
-                catch (Exception ex)
-                {
-                    Log.Exception($"Canopy glass reporting for '{state.Definition.Section}'", ex);
-                }
-            }
-        }
-
-        private static void Report(ToggleState state)
-        {
-            CanopyGlassDefinition definition = state.Definition;
-
-            if (!state.RootFound)
-            {
-                MissingMemberLog.WarnOnce(
-                    $"CanopyGlass.{definition.Section}.Waiting",
-                    $"[Canopy Glass] No aircraft root(s) '{string.Join(", ", definition.RootNames)}' found yet. Will retry when another WeaponManager awakens.");
-                return;
-            }
-
-            if (state.Found == 0)
+            if (matchedDefinition.GlassNames == null || matchedDefinition.GlassNames.Length == 0)
             {
                 MissingMemberLog.ErrorOnce(
-                    $"CanopyGlass.{definition.Section}.Missing",
-                    $"[Canopy Glass] Aircraft root(s) '{string.Join(", ", definition.RootNames)}' were found, but none of the expected glass objects were found: {string.Join(", ", definition.GlassNames)}.");
+                    $"CanopyGlass.{matchedDefinition.Section}.MissingGlassNames",
+                    $"[Canopy Glass] Definition for '{matchedDefinition.Section}' is missing GlassNames.");
                 return;
             }
 
-            string[] missingNames = definition.GlassNames
-                .Where(glass => !state.FoundNames.Contains(glass))
+            HashSet<string> glassNameSet = new HashSet<string>(matchedDefinition.GlassNames, StringComparer.OrdinalIgnoreCase);
+            HashSet<string> foundNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            int found = 0;
+            int disabled = 0;
+
+            // Localized search: ONLY search within this specific aircraft root.
+            // This is extremely fast and completely avoids global scene sweeps.
+            Transform[] transforms = rootTransform.GetComponentsInChildren<Transform>(true);
+            foreach (Transform child in transforms)
+            {
+                if (child == null || child.gameObject == null)
+                    continue;
+
+                string cleanName = ObjectNameUtility.RemoveCloneSuffix(child.name);
+                if (string.IsNullOrEmpty(cleanName) || !glassNameSet.Contains(cleanName))
+                    continue;
+
+                found++;
+                foundNames.Add(cleanName);
+
+                if (child.gameObject.activeSelf)
+                {
+                    child.gameObject.SetActive(false);
+                    disabled++;
+                }
+            }
+
+            if (found == 0)
+            {
+                MissingMemberLog.ErrorOnce(
+                    $"CanopyGlass.{matchedDefinition.Section}.Missing|{rootName}",
+                    $"[Canopy Glass] Aircraft root '{rootName}' was found, but none of the expected glass objects were found: {string.Join(", ", matchedDefinition.GlassNames)}.");
+                return;
+            }
+
+            string[] missingNames = matchedDefinition.GlassNames
+                .Where(glass => !foundNames.Contains(glass))
                 .ToArray();
 
             if (missingNames.Length > 0)
             {
                 MissingMemberLog.ErrorOnce(
-                    $"CanopyGlass.{definition.Section}.PartialMissing",
-                    $"[Canopy Glass] Aircraft root(s) '{string.Join(", ", definition.RootNames)}' are missing glass object(s): {string.Join(", ", missingNames)}.");
+                    $"CanopyGlass.{matchedDefinition.Section}.PartialMissing|{rootName}",
+                    $"[Canopy Glass] Aircraft root '{rootName}' is missing glass object(s): {string.Join(", ", missingNames)}.");
             }
 
-            if (state.Disabled > 0)
+            if (disabled > 0)
             {
-                string logKey = $"CanopyGlass.Disabled|{definition.Section}";
+                string logKey = $"CanopyGlass.Disabled|{matchedDefinition.Section}|{rootName}";
                 if (infoLogKeys.Add(logKey))
-                    Log.Info($"[Canopy Glass] Disabled {state.Disabled} glass object(s) for '{definition.Section}'.");
+                {
+                    Log.Info($"[Canopy Glass] Disabled {disabled} glass object(s) for '{matchedDefinition.Section}' on '{rootName}'.");
+                }
             }
             else
             {
-                string logKey = $"CanopyGlass.AlreadyHidden|{definition.Section}";
+                string logKey = $"CanopyGlass.AlreadyHidden|{matchedDefinition.Section}|{rootName}";
                 if (infoLogKeys.Add(logKey))
-                    Log.Info($"[Canopy Glass] Glass for '{definition.Section}' was already hidden by this mod.");
+                {
+                    Log.Info($"[Canopy Glass] Glass for '{matchedDefinition.Section}' on '{rootName}' was already hidden by this mod.");
+                }
             }
         }
+    }
 
-        private static bool IsUnderAnyRoot(GameObject gameObject, string[] rootNames)
+
+
+    // ========================================================================
+    // Blueprint weapon spawn-time enforcement.
+    // Hooks WeaponManager.SpawnWeapons Prefix to strip disabled blueprint
+    // options from hardpointSets before weapons are spawned. This is a
+    // safety net for saved missions or network syncs that force a disabled
+    // weapon into the loadout.
+    // ========================================================================
+    [HarmonyPatch(typeof(WeaponManager), "SpawnWeapons")]
+    public static class BlueprintWeaponManagerInitPatch
+    {
+        public static void Prefix(WeaponManager __instance)
         {
-            if (gameObject == null || rootNames == null)
-                return false;
+            if (!RuntimeSettings.Captured)
+                return;
+            if (__instance == null || __instance.transform == null)
+                return;
 
-            foreach (string rootName in rootNames)
+            try
             {
-                if (!string.IsNullOrEmpty(rootName) && ObjectNameUtility.IsUnderNamedObject(gameObject, rootName))
-                    return true;
+                string rootName = ObjectNameUtility.GetCleanRootName(__instance.transform.root?.gameObject ?? __instance.gameObject);
+                if (string.IsNullOrEmpty(rootName))
+                    return;
+
+                // Strip from the live instance as a safety net.
+                if (__instance.hardpointSets != null)
+                {
+                    foreach (BlueprintWeaponRule rule in BlueprintWeaponRemovalSystem.Rules)
+                    {
+                        if (rule.Enabled || !rule.MatchesAircraft(rootName))
+                            continue;
+
+                        foreach (int hardpointSetIndex in rule.HardpointSets)
+                        {
+                            if (hardpointSetIndex < 0 || hardpointSetIndex >= __instance.hardpointSets.Length)
+                                continue;
+
+                            object hardpoint = __instance.hardpointSets[hardpointSetIndex];
+                            if (BlueprintRemovalReflection.IsNull(hardpoint))
+                                continue;
+
+                            int removedCount;
+                            string failure;
+                            if (BlueprintRemovalReflection.TryRemoveWeaponOptions(hardpoint, rule.MatchesWeaponOption, out removedCount, out failure))
+                            {
+                                if (removedCount > 0)
+                                {
+                                    string logKey = $"BlueprintWeaponSpawnStrip.instance|{rootName}|{rule.DisplayName}|{hardpointSetIndex}";
+                                    if (BlueprintWeaponRemovalSystem.DiagnosticLogKeys.Add(logKey))
+                                    {
+                                        Log.Info($"[Blueprints] Removed {removedCount} '{rule.DisplayName}' option(s) from {rootName} hardpoint set {hardpointSetIndex} (SpawnWeapons prefix).");
+                                    }
+                                }
+                            }
+                            else if (!string.IsNullOrEmpty(failure))
+                            {
+                                MissingMemberLog.ErrorOnce(
+                                    $"BlueprintWeaponSpawnStrip.Failure|instance|{rootName}|{rule.DisplayName}|{hardpointSetIndex}|{failure}",
+                                    $"[Blueprints] Could not remove '{rule.DisplayName}' from {rootName} hardpoint set {hardpointSetIndex} (SpawnWeapons prefix). Failure: {failure}.");
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Exception("Blueprint weapon SpawnWeapons prefix", ex);
+            }
+        }
+    }
+
+
+
+    // ========================================================================
+    // Blueprint weapon loadout enforcement.
+    // Prevents disabled blueprint weapons from spawning even if they are
+    // present in a saved mission, network sync, or AI fallback loadout.
+    // ========================================================================
+    [HarmonyPatch(typeof(WeaponManager), "LoadHardpointSet")]
+    public static class BlueprintWeaponLoadPatch
+    {
+        public static bool Prefix(WeaponManager __instance, object hardpointSet, object weaponMount)
+        {
+            if (!RuntimeSettings.Captured)
+                return true;
+
+            if (weaponMount == null || hardpointSet == null)
+                return true;
+
+            try
+            {
+                if (BlueprintWeaponRemovalSystem.IsWeaponMountDisabled(__instance, weaponMount))
+                {
+                    Traverse traverse = Traverse.Create(hardpointSet);
+                    traverse.Method("RemoveMounts").GetValue();
+
+                    string mountName = weaponMount is UnityEngine.Object uObj ? uObj.name : weaponMount.ToString();
+                    string logKey = $"BlueprintWeaponLoad.Blocked|{mountName}";
+                    if (BlueprintWeaponRemovalSystem.DiagnosticLogKeys.Add(logKey))
+                    {
+                        Log.Info($"[Blueprints] Blocked disabled weapon '{mountName}' from spawning via LoadHardpointSet.");
+                    }
+                    return false;
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Exception("Blueprint weapon LoadHardpointSet prefix", ex);
             }
 
-            return false;
+            return true;
+        }
+    }
+
+
+
+    // ========================================================================
+    // Blueprint AI selection enforcement.
+    // Postfixes SelectAIAircraftWeapons to ensure the AI never returns a
+    // loadout containing disabled blueprint weapons, acting as a final safety net.
+    // ========================================================================
+    [HarmonyPatch(typeof(WeaponManager), "SelectAIAircraftWeapons")]
+    public static class BlueprintAISelectionPatch
+    {
+        public static void Postfix(WeaponManager __instance, object __result)
+        {
+            if (!RuntimeSettings.Captured)
+                return;
+            if (__result == null)
+                return;
+
+            try
+            {
+                Traverse traverse = Traverse.Create(__result);
+                Traverse weaponsField = traverse.Field("weapons");
+                if (!weaponsField.FieldExists())
+                    return;
+
+                object weaponsObj = weaponsField.GetValue();
+                if (weaponsObj is System.Collections.IList weaponsList)
+                {
+                    bool modified = false;
+                    for (int i = weaponsList.Count - 1; i >= 0; i--)
+                    {
+                        object mountObj = weaponsList[i];
+                        if (mountObj != null && BlueprintWeaponRemovalSystem.IsWeaponMountDisabled(__instance, mountObj))
+                        {
+                            weaponsList.RemoveAt(i);
+                            modified = true;
+                        }
+                    }
+
+                    if (modified)
+                    {
+                        string rootName = ObjectNameUtility.GetCleanRootName(__instance.gameObject);
+                        string logKey = $"BlueprintAISelection.Cleaned|{rootName}";
+                        if (BlueprintWeaponRemovalSystem.DiagnosticLogKeys.Add(logKey))
+                        {
+                            Log.Info($"[Blueprints] Removed disabled blueprint weapons from AI loadout selection for '{rootName}'.");
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Exception("Blueprint AI selection postfix", ex);
+            }
         }
     }
 }
