@@ -1,6 +1,6 @@
 # BVR - Balance and Variety Rework
 
-## Version 1.2.4
+## Version 1.2.5
 
 ## What this is:
 This rebalance project aims to push Nuclear Option's gameplay towards a more realistic simlite experience while still honouring ShockFront's vision.
